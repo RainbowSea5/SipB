@@ -10,6 +10,7 @@
 
 #include "SipTools/SipTools.h"
 using namespace toolkit;
+using namespace std;
 
 namespace gb28181 {
 Gb28181Client::Gb28181Client(EventPoller::Ptr poller)
@@ -144,6 +145,10 @@ void Gb28181Client::sendInitialRegister() {
     // Use _server_ip (not _server_domain) as the transport target,
     // so eXosip sends the REGISTER packet to the correct SIP server address.
     std::string proxy = "sip:" + _server_id  + "@" + _server_ip + ":" + std::to_string(_server_port);
+    _sip_proxy = proxy;
+    _sip_from = from;
+    _sip_to = "sip:" + _server_id+"@"+_server_domain;
+
     osip_message_t *reg_message = nullptr;
     int ret = eXosip_register_build_initial_register(_ex_ctx, from.c_str(),proxy.c_str(),
         nullptr, _expires, &reg_message);
@@ -186,22 +191,173 @@ void Gb28181Client::sendRefreshRegister() {
     }
 }
 
+void Gb28181Client::checkKeepAlive() {
+
+}
+
+void Gb28181Client::checkRefreshRegister() {
+
+}
+
 void Gb28181Client::onEventMessageNew(eXosip_event_t *event) {
-    if (!event) {
+    if (!event || !event->request) {
         return;
     }
     auto request = event->request;
-    auto response = event->response;
-    if (MSG_IS_SUBSCRIBE(request)) {
 
+    if (MSG_IS_SUBSCRIBE(request)) {
+        DebugL << "处理订阅新请求";
+        handleSubscribe(event);
+    } else if (MSG_IS_MESSAGE(request)) {
+        DebugL << "收到 MESSAGE 请求";
+        handleMessage(event);
+    } else if (MSG_IS_NOTIFY(request)) {
+        DebugL << "收到 NOTIFY 请求";
     }
+}
+
+void Gb28181Client::handleSubscribe(eXosip_event_t *event) {
+    auto request = event->request;
+
+    auto xml_doc = SipTools::sipMessageGetBodyXmlDocument(request);
+    auto xml_root = xml_doc.document_element();
+    std::string cmd_type = xml_root.child_value(STR_CMD_TYPE);
+
+    InfoL << "收到订阅, 类型 "<<cmd_type;
+
+    int expires = 3600;
+    osip_header_t *hdr = nullptr;
+    std::string event_header_str;
+
+    osip_message_get_expires(request,0,&hdr);
+    if (hdr) {
+        expires = atoi(hdr->hvalue);
+    }
+    hdr = nullptr;
+
+    osip_message_header_get_byname(request,"event",0,&hdr);
+    if (hdr){
+        event_header_str = hdr->hvalue;
+    }
+    PrintD("Event ID: %s, Expires: %d, %s",event_header_str.c_str(),expires,cmd_type.c_str());
+
+    //in-dialog 是对已经存在的
+    if (event->type == EXOSIP_IN_SUBSCRIPTION_NEW) {
+        auto l = lockContext();
+        if (expires <= 0) {
+            InfoL << "取消订阅: " << event_header_str << " " << cmd_type;
+            osip_message_t *answer = nullptr;
+            if (eXosip_insubscription_build_answer(_ex_ctx, event->tid, 200, &answer) == 0 && answer) {
+                eXosip_insubscription_send_answer(_ex_ctx, event->tid, 200, answer);
+                InfoL << "已发送取消订阅 200 OK";
+            }
+        }else {
+            osip_message_t *answer = nullptr;
+            if (eXosip_insubscription_build_answer(_ex_ctx, event->tid, 200, &answer) != 0) {
+                ErrorL << "构建 200 OK 响应失败";
+                return;
+            }
+
+            auto s = std::to_string(expires);
+            osip_message_set_header(answer, "Expires", s.c_str());
+
+            // Set Contact
+            // std::string contact = "<sip:" + _device_id + "@" + _local_ip + ">";
+            // osip_message_set_header(answer, "Contact", contact.c_str());
+
+            eXosip_insubscription_send_answer(_ex_ctx, event->tid, 200, answer);
+            DebugL << "响应订阅200ok";
+        }
+    }else if (expires <= 0) {
+        ErrorL << "sssssssssssssssssss" << expires;
+    }
+
+    //这里通知上层
+    if (_on_subscribe_func) {
+        _on_subscribe_func(cmd_type, expires);
+    }
+}
+
+void Gb28181Client::handleMessage(eXosip_event_t *event) {
+    auto request = event->request;
+    auto xml_doc = SipTools::sipMessageGetBodyXmlDocument(request);
+    auto xml_root = xml_doc.document_element();
+    auto cmd_type = xml_root.child_value(STR_CMD_TYPE);
+
+    InfoL << "收到Message消息, CmdType "<<cmd_type;
+    if (osip_strcasecmp(cmd_type, STR_CATA_LOG) == 0) {
+        handleCatalogQuery(event, request, xml_root.child_value("SN"));
+    }else if (osip_strcasecmp(cmd_type,STR_DEVICE_INFO) == 0) {
+        handleDeviceInfoQuery(event,request,xml_root.child_value("SN"));
+    }else {
+        WarnL << "未实现的类型";
+    }
+}
+
+void Gb28181Client::handleCatalogQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
+    InfoL << "Catalog query, SN: " << sn;
+
+    // 1. Send 200 OK to acknowledge
+    {
+        auto l = lockContext();
+        osip_message_t *answer = nullptr;
+        if (eXosip_message_build_answer(_ex_ctx, event->tid, 200, &answer) == 0 && answer) {
+            eXosip_message_send_answer(_ex_ctx, event->tid, 200, answer);
+            InfoL << "已响应 Catalog 查询 200 OK";
+        }
+    }
+
+    // 2. Build and send response MESSAGE with catalog data
+    if (_on_catalog_query_cb) {
+        std::string body = _on_catalog_query_cb(sn);
+        if (!body.empty()) {
+            auto l = lockContext();
+            osip_message_t *msg = nullptr;
+            int ret = eXosip_message_build_request(_ex_ctx, &msg, "MESSAGE",
+                                                    _sip_to.c_str(),
+                                                    _sip_from.c_str(),
+                                                    nullptr);
+            if (ret == 0 && msg) {
+                osip_message_set_to(msg, _sip_to.c_str());
+                osip_message_set_content_type(msg, "Application/MANSCDP+xml");
+                osip_message_set_body(msg, body.c_str(), body.size());
+                eXosip_message_send_request(_ex_ctx, msg);
+                InfoL << "已发送 Catalog 响应 MESSAGE, SN: " << sn;
+            } else {
+                ErrorL << "构建 Catalog 响应 MESSAGE 失败, ret=" << ret;
+            }
+        }
+    }
+}
+
+void Gb28181Client::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
+    InfoL << "DeviceInfo query, SN: " << sn;
+
+    {
+        auto l = lockContext();
+        osip_message_t *answer = nullptr;
+        if (eXosip_message_build_answer(_ex_ctx, event->tid, 200, &answer) == 0 && answer) {
+            eXosip_message_send_answer(_ex_ctx, event->tid, 200, answer);
+            InfoL << "已响应 DeviceInfo 查询 200 OK";
+        }
+    }
+}
+
+onceToken Gb28181Client::lockContext() const {
+    return {[this]() {
+        eXosip_lock(_ex_ctx);
+    },[this]() {
+        eXosip_unlock(_ex_ctx);
+    }};
 }
 
 void Gb28181Client::eventLoop() {
     DebugL << "Event thread started";
 
     while (_running) {
-        eXosip_event_t *event = eXosip_event_wait(_ex_ctx, 5, 0);
+        eXosip_event_t *event = eXosip_event_wait(_ex_ctx, 1, 0);
+
+        checkKeepAlive();
 
         if (event == nullptr) {
             continue;
@@ -211,7 +367,7 @@ void Gb28181Client::eventLoop() {
         eXosip_default_action(_ex_ctx, event);
         eXosip_unlock(_ex_ctx);
 
-        SipTools::printEvent(event,_user_id.c_str());
+        // SipTools::printEvent(event,_user_id.c_str());
         auto request = event->request;
         auto response = event->response;
 
@@ -230,8 +386,9 @@ void Gb28181Client::eventLoop() {
                 std::string reason = "Registration failed";
                 if (response) {
                     if (response->status_code == 401) {
-                        DebugL << "401 内部会自动处理，直接返回";
-                        return;
+                        //内部会自动处理401 响应
+                        DebugL << "收到401";
+                        break;
                     }
                     reason += " (" + std::to_string(response->status_code);
                     if (response->reason_phrase) {
@@ -250,6 +407,10 @@ void Gb28181Client::eventLoop() {
 
             case EXOSIP_MESSAGE_NEW: {
                 onEventMessageNew(event);
+                break;
+            }
+            case EXOSIP_IN_SUBSCRIPTION_NEW: {
+                handleSubscribe(event);
                 break;
             }
 

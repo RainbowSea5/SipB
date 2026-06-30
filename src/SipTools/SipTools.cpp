@@ -70,6 +70,7 @@ pugi::xml_document sipMessageGetBodyXmlDocument(const osip_message_t *msg) {
         return {};
     }
 
+    // DebugL << std::string(body->body, body->length);
     return stringToXmlDocument({body->body, body->length});
 }
 
