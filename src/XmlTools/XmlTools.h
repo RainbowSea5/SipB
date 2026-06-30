@@ -10,7 +10,7 @@ namespace XmlTools {
 
 pugi::xml_document stringToXmlDocument(const std::string& str);
 
-std::string xmlDocumentToString(const pugi::xml_document& doc);
+std::string xmlDocumentToString(pugi::xml_document& doc);
 
 }
 

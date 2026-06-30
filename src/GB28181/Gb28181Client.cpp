@@ -192,7 +192,43 @@ void Gb28181Client::sendRefreshRegister() {
 }
 
 void Gb28181Client::checkKeepAlive() {
+    if (!_registered) {
+        return;
+    }
 
+    auto now_time = toolkit::getCurrentMillisecond(true)/1000;
+    if (now_time - _last_keep_alive_time < _keepalive_interval) {
+        return;
+    }
+    _last_keep_alive_time = now_time;
+
+    // Build KeepAlive XML body
+    auto sn = _sn++;
+    pugi::xml_document doc;
+    auto root = doc.append_child("Notify");
+    root.append_child("CmdType").append_child(pugi::node_pcdata).set_value("Keepalive");
+    root.append_child("SN").append_child(pugi::node_pcdata).set_value(std::to_string(sn).c_str());
+    root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(_device_id.c_str());
+    root.append_child("Status").append_child(pugi::node_pcdata).set_value("OK");
+
+    std::string body = XmlTools::xmlDocumentToString(doc);
+
+    // Build and send MESSAGE
+    auto l = lockContext();
+    osip_message_t *msg = nullptr;
+    int ret = eXosip_message_build_request(_ex_ctx, &msg, "MESSAGE",
+                                            _sip_proxy.c_str(),
+                                            _sip_from.c_str(),
+                                            nullptr);
+    if (ret == 0 && msg) {
+        osip_message_set_to(msg, _sip_to.c_str());
+        osip_message_set_content_type(msg, "Application/MANSCDP+xml");
+        osip_message_set_body(msg, body.c_str(), body.size());
+        eXosip_message_send_request(_ex_ctx, msg);
+        InfoL << "心跳已发送, SN: " << sn;
+    } else {
+        ErrorL << "构建心跳 MESSAGE 失败, ret=" << ret;
+    }
 }
 
 void Gb28181Client::checkRefreshRegister() {
@@ -379,6 +415,7 @@ void Gb28181Client::eventLoop() {
                 if (cb) {
                     cb(true, "");
                 }
+                checkKeepAlive();
                 break;
             }
 

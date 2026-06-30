@@ -88,6 +88,13 @@ private:
     std::string _local_ip;
     uint16_t _local_port;
 
+    // 心跳定时器（每次 eventLoop 轮询减 1）
+    int _keepalive_interval{60};
+    uint64_t _last_keep_alive_time{0};
+
+    // 序列号
+    int _sn{0};
+
     std::string _sip_from,_sip_to,_sip_proxy;
 
     int _expires,_register_id{};
