@@ -1,0 +1,6 @@
+[submodule "3rd/ZLToolKit"]
+	path = 3rd/ZLToolKit
+	url = https://gitee.com/xia-chu/ZLToolKit
+[submodule "3rd/pugixml"]
+	path = 3rd/pugixml
+	url = https://github.com/zeux/pugixml.git
