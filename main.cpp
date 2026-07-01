@@ -27,6 +27,15 @@ int main() {
             InfoL << "[Callback] === Registration FAILED: " << reason << " ===";
         }
     });
+    client->setOnQueryDeviceInfo([](std::function<void(gb28181::DeviceInfo& info)> invoker) {
+        if (invoker) {
+            gb28181::DeviceInfo info;
+            info.manufacturer = "WCT";
+            info.firmware = "1.0.0";
+            info.model = "1.0.0";
+            invoker(info);
+        }
+    });
     // ========= 1. 初始化 eXosip，监听本地 UDP 5060 端口 =========
     if (!client->init(true,"wct")) {
         ErrorL << "[Main] Failed to initialize SIP stack";

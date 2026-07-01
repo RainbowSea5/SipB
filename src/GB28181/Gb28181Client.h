@@ -6,6 +6,7 @@
 #include <thread>
 #include <atomic>
 #include <memory>
+#include <utility>
 #include <eXosip2/eXosip.h>
 #include "Poller/EventPoller.h"
 
@@ -14,6 +15,10 @@ static const char* STR_CMD_TYPE{"CmdType"};
 static const char* STR_CATA_LOG{"Catalog"};
 static const char* STR_DEVICE_INFO{"DeviceInfo"};
 static const char* STR_KEEP_ALIVE{"Keepalive"};
+static const char* STR_METHOD_MESSAGE{"MESSAGE"};
+static const char* STR_XML_ROOT_RESPONSE{"Response"};
+static const char* STR_XML_ROOT_QUERY{"Query"};
+
 
 enum class ClientStatus {
     UN_INIT = 0,
@@ -22,6 +27,13 @@ enum class ClientStatus {
     REGISTERED,
     UNREGISTERING,
     UNREGISTER,
+};
+
+struct DeviceInfo {
+    std::string manufacturer;
+    std::string model;
+    std::string firmware;
+    std::string createXmlResponseString(const std::string& device_id,const std::string& sn_str) const;
 };
 
 class Gb28181Client :public std::enable_shared_from_this<Gb28181Client>{
@@ -61,7 +73,15 @@ public:
     void setOnCatalogQuery(CatalogQueryCallback cb) {
         _on_catalog_query_cb = std::move(cb);
     }
+
+    using OnQueryDeviceInfoCallback = std::function<void(std::function<void(DeviceInfo& info)>)>;
+    void setOnQueryDeviceInfo(OnQueryDeviceInfoCallback on_device_info_func) {
+        _on_query_device_info_func = std::move(on_device_info_func);
+    }
+
+    std::weak_ptr<Gb28181Client> weakPtr();
 private:
+    void sendMessage(const std::string& body_str);
     void onMessageAnswered(eXosip_event_t * event);
 
     void eventLoop();
@@ -87,7 +107,12 @@ private:
     SubscribeCallback _on_subscribe_func;
     // 目录查询回调
     CatalogQueryCallback _on_catalog_query_cb;
+    // 网络设备信息查询
+    OnQueryDeviceInfoCallback _on_query_device_info_func;
 
+
+
+private:
     std::function<void()> _on_init_func;
     std::function<void(bool success,const std::string& reason)> _on_register_func;
 
@@ -102,7 +127,7 @@ private:
     std::string _server_id, _server_domain;
     std::string _user_id,_password,_device_id;
     std::string _local_ip;
-    uint16_t _local_port;
+    uint16_t _local_port{0};
 
     int _keepalive_interval{60};
     uint64_t _last_keep_alive_time{0},_last_keep_alive_response_time{0};
@@ -112,7 +137,7 @@ private:
 
     std::string _sip_from,_sip_to,_sip_proxy;
 
-    int _expires,_register_id{0};
+    int _expires{0},_register_id{0};
     uint64_t _last_register_time{0};
 };
 }

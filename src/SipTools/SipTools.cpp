@@ -77,8 +77,6 @@ pugi::xml_document sipMessageGetBodyXmlDocument(const osip_message_t *msg) {
 void printEvent(eXosip_event_t *event, const char *user_id) {
     if (!event)
         return;
-    auto msg = event->request;
-
     auto request = event->request;
     auto response = event->response;
     bool is_my_request = request && osip_strcasecmp(request->from->url->username, user_id) == 0;
@@ -96,7 +94,7 @@ void printEvent(eXosip_event_t *event, const char *user_id) {
         return;
     }
     if (strcmp(cmd_type, "MobilePosition")==0) {
-        if (response->content_length && strcmp(response->content_length->value, "0") == 0) {
+        if (response && response->content_length && strcmp(response->content_length->value, "0") == 0) {
             PrintD("上报位置，响应无消息体, 状态码 = %d", response->status_code);
             return;
         }

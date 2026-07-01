@@ -2,7 +2,6 @@
 
 #include <iostream>
 #include <cstring>
-#include <cstdlib>
 #include <utility>
 #include <sys/socket.h>   // AF_INET
 #include <netinet/in.h>   // IPPROTO_UDP
@@ -13,6 +12,21 @@ using namespace toolkit;
 using namespace std;
 
 namespace gb28181 {
+std::string DeviceInfo::createXmlResponseString(const std::string &device_id, const std::string &sn_str) const {
+    pugi::xml_document doc;
+    auto root = doc.append_child(STR_XML_ROOT_RESPONSE);
+    root.append_child(STR_CMD_TYPE).append_child(pugi::node_pcdata).set_value(STR_DEVICE_INFO);
+    root.append_child("SN").append_child(pugi::node_pcdata).set_value(sn_str);
+    root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(device_id);
+    root.append_child("Result").append_child(pugi::node_pcdata).set_value("OK");
+
+    root.append_child("Manufacturer").append_child(pugi::node_pcdata).set_value(manufacturer);
+    root.append_child("Model").append_child(pugi::node_pcdata).set_value(model);
+    root.append_child("Firmware").append_child(pugi::node_pcdata).set_value(firmware);
+
+    return XmlTools::xmlDocumentToString(doc);
+}
+
 Gb28181Client::Gb28181Client(EventPoller::Ptr poller)
     : _ex_ctx(nullptr)
       , _running(false)
@@ -416,7 +430,7 @@ void Gb28181Client::handleCatalogQuery(eXosip_event_t *event, osip_message_t *re
 }
 
 void Gb28181Client::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
-    InfoL << "DeviceInfo query, SN: " << sn;
+    InfoL << "[DeviceInfo] 设备信息查询, SN: " << sn;
 
     {
         auto l = lockContext();
@@ -426,6 +440,19 @@ void Gb28181Client::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t 
             InfoL << "已响应 DeviceInfo 查询 200 OK";
         }
     }
+    if (_on_query_device_info_func) {
+        auto weak_ptr = weakPtr();
+        _on_query_device_info_func([sn,weak_ptr](DeviceInfo& info) {
+            auto client = weak_ptr.lock();
+            if (!client) {
+                return;
+            }
+            auto xml_str = info.createXmlResponseString(client->_device_id,sn);
+            InfoL << "[DeviceInfo]上报设备信息";
+            DebugL << xml_str;
+            client->sendMessage(xml_str);
+        });
+    }
 }
 
 onceToken Gb28181Client::lockContext() const {
@@ -434,6 +461,28 @@ onceToken Gb28181Client::lockContext() const {
     },[this]() {
         eXosip_unlock(_ex_ctx);
     }};
+}
+
+std::weak_ptr<Gb28181Client> Gb28181Client::weakPtr() {
+    return shared_from_this();
+}
+
+void Gb28181Client::sendMessage(const std::string &body_str) {
+    if (!isRegistered())
+        return;
+    auto l = lockContext();
+    osip_message_t* msg{nullptr};
+    auto ret = eXosip_message_build_request(_ex_ctx,&msg,STR_METHOD_MESSAGE,
+        _sip_proxy.c_str(),_sip_from.c_str(),nullptr);
+    if (ret || msg == nullptr) {
+        ErrorL << "构建消息失败 " << body_str;
+        return;
+    }
+    osip_message_set_body(msg,body_str.data(),body_str.size());
+    ret = eXosip_message_send_request(_ex_ctx,msg);
+    if (ret<=0 || msg == nullptr) {
+        ErrorL << "发送消息失败 " << body_str;
+    }
 }
 
 void Gb28181Client::onMessageAnswered(eXosip_event_t *event) {
@@ -470,7 +519,7 @@ void Gb28181Client::eventLoop() {
             eXosip_default_action(_ex_ctx, event);
         }
 
-        // SipTools::printEvent(event,_user_id.c_str());
+        SipTools::printEvent(event,_user_id.c_str());
         auto request = event->request;
         auto response = event->response;
 
