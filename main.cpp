@@ -29,12 +29,25 @@ int main() {
     });
     client->setOnQueryDeviceInfo([](std::function<void(gb28181::DeviceInfo& info)> invoker) {
         if (invoker) {
-            gb28181::DeviceInfo info;
-            info.manufacturer = "WCT";
-            info.firmware = "1.0.0";
-            info.model = "1.0.0";
+            gb28181::DeviceInfo info("WCT","1.0.0","1.0.0");
             invoker(info);
         }
+    });
+    client->setOnCatalogQuery([](std::function<void(std::vector<gb28181::DeviceInfo>& ,bool)> invoker ) {
+       if (invoker) {
+           std::vector<gb28181::DeviceInfo> list;
+           {
+               gb28181::DeviceInfo info("wct","1.0.0",
+                   "f1.0.0","55555555555555555557","Video");
+               list.push_back(info);
+           }
+           {
+               gb28181::DeviceInfo info2("wct","1.0.0",
+                   "f1.0.0","55555555588555555557","Video2");
+               list.push_back(info2);
+           }
+           invoker(list,false);
+       }
     });
     // ========= 1. 初始化 eXosip，监听本地 UDP 5060 端口 =========
     if (!client->init(true,"wct")) {

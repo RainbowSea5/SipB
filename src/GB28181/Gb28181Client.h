@@ -9,32 +9,8 @@
 #include <utility>
 #include <eXosip2/eXosip.h>
 #include "Poller/EventPoller.h"
-
+#include "GB28181Def.h"
 namespace gb28181 {
-static const char* STR_CMD_TYPE{"CmdType"};
-static const char* STR_CATA_LOG{"Catalog"};
-static const char* STR_DEVICE_INFO{"DeviceInfo"};
-static const char* STR_KEEP_ALIVE{"Keepalive"};
-static const char* STR_METHOD_MESSAGE{"MESSAGE"};
-static const char* STR_XML_ROOT_RESPONSE{"Response"};
-static const char* STR_XML_ROOT_QUERY{"Query"};
-
-
-enum class ClientStatus {
-    UN_INIT = 0,
-    INIT,
-    REGISTERING,
-    REGISTERED,
-    UNREGISTERING,
-    UNREGISTER,
-};
-
-struct DeviceInfo {
-    std::string manufacturer;
-    std::string model;
-    std::string firmware;
-    std::string createXmlResponseString(const std::string& device_id,const std::string& sn_str) const;
-};
 
 class Gb28181Client :public std::enable_shared_from_this<Gb28181Client>{
 public:
@@ -68,8 +44,7 @@ public:
         _on_register_func = std::move(on_register_func);
     }
 
-    /** 目录查询回调: 传入 SN，返回响应 XML body（空 = 不发送） */
-    using CatalogQueryCallback = std::function<std::string(const std::string& sn)>;
+    using CatalogQueryCallback = std::function<void(std::function<void(std::vector<DeviceInfo>&,bool)>)>;
     void setOnCatalogQuery(CatalogQueryCallback cb) {
         _on_catalog_query_cb = std::move(cb);
     }
@@ -129,7 +104,7 @@ private:
     std::string _local_ip;
     uint16_t _local_port{0};
 
-    int _keepalive_interval{60};
+    int _keepalive_interval{10};
     uint64_t _last_keep_alive_time{0},_last_keep_alive_response_time{0};
 
     // 序列号
