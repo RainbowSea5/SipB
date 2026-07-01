@@ -87,7 +87,8 @@ void printEvent(eXosip_event_t *event, const char *user_id) {
     auto response_str = sipMessageToString(response);
 
     auto request_doc = sipMessageGetBodyXmlDocument(request);
-    const auto cmd_type = request_doc.child_value("CmdType");
+    auto root_node = request_doc.document_element();
+    const auto cmd_type = root_node.child_value("CmdType");
 
 
     //心跳不打印

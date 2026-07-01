@@ -16,9 +16,7 @@ namespace gb28181 {
 Gb28181Client::Gb28181Client(EventPoller::Ptr poller)
     : _ex_ctx(nullptr)
       , _running(false)
-      , _registered(false)
       , _server_port(5060)
-      , _expires(3600)
       , _poller(std::move(poller)) {
 }
 
@@ -27,6 +25,7 @@ Gb28181Client::~Gb28181Client() {
 }
 
 bool Gb28181Client::init(bool is_udp, const std::string& user_agent,int local_port){
+    getCurrentMillisecond();
     if (_ex_ctx) {
         WarnL << "已经初始化了";
         return true;
@@ -56,6 +55,7 @@ bool Gb28181Client::init(bool is_udp, const std::string& user_agent,int local_po
         eXosip_set_user_agent(_ex_ctx, user_agent.c_str());
     }
 
+    _status = ClientStatus::INIT;
     InfoL << "eXosip initialized, listening on UDP " << local_port;
     return true;
 }
@@ -94,11 +94,8 @@ bool Gb28181Client::startRegister(const std::string &server_ip, int server_port,
          // ua_core.sip_protocol_);
 
     _running = true;
-    _registered = false;
     sendInitialRegister();
     _event_thread = std::thread(&Gb28181Client::eventLoop, this);
-
-
     return true;
 }
 
@@ -126,24 +123,22 @@ void Gb28181Client::stop() {
         _ex_ctx = nullptr;
     }
 
-    _registered = false;
+    // _registered = false;
     InfoL << "stopped";
 }
-int ua_add_outboundproxy(osip_message_t *msg, const char *outboundproxy) {
-    int ret = 0;
-    char head[1024] = {0};
-
-    snprintf(head, sizeof(head) - 1, "<%s;lr>", outboundproxy);
-
-    osip_list_special_free(&msg->routes, reinterpret_cast<void (*)(void *)>(osip_route_free));
-    ret = osip_message_set_route(msg, head);
-    return ret;
-}
+// int ua_add_outboundproxy(osip_message_t *msg, const char *outboundproxy) {
+//     int ret = 0;
+//     char head[1024] = {0};
+//
+//     snprintf(head, sizeof(head) - 1, "<%s;lr>", outboundproxy);
+//
+//     osip_list_special_free(&msg->routes, reinterpret_cast<void (*)(void *)>(osip_route_free));
+//     ret = osip_message_set_route(msg, head);
+//     return ret;
+// }
 void Gb28181Client::sendInitialRegister() {
     eXosip_lock(_ex_ctx);
     std::string from = "sip:" + _device_id + "@" + _server_domain;
-    // Use _server_ip (not _server_domain) as the transport target,
-    // so eXosip sends the REGISTER packet to the correct SIP server address.
     std::string proxy = "sip:" + _server_id  + "@" + _server_ip + ":" + std::to_string(_server_port);
     _sip_proxy = proxy;
     _sip_from = from;
@@ -179,27 +174,58 @@ void Gb28181Client::sendInitialRegister() {
         InfoL << "Initial REGISTER sent (expires=" << _expires << "s)";
     }
     eXosip_unlock(_ex_ctx);
-
+    _status = ClientStatus::REGISTERING;
 }
 
 void Gb28181Client::sendRefreshRegister() {
+    auto l = lockContext();
     osip_message_t *reg = nullptr;
     int ret = eXosip_register_build_register(_ex_ctx, _register_id, _expires, &reg);
     if (ret == 0 && reg) {
         eXosip_register_send_register(_ex_ctx,_register_id, reg);
         InfoL << "Refresh REGISTER sent";
+    }else {
+        ErrorL << "构建刷新注册消息失败";
     }
 }
 
+bool Gb28181Client::sendUnRegisterMessage() {
+    if (!_ex_ctx || !_register_id) {
+        return false;
+    }
+
+    osip_message_t *reg = nullptr;
+    int ret = eXosip_register_build_register(_ex_ctx,_register_id, 0, &reg);
+    if (ret || !reg) {
+        ErrorL << "创建注销请求失败 " << ret;
+        return false;
+    }
+    ret = eXosip_register_send_register(_ex_ctx,_register_id, reg);
+    if (ret <=0) {
+        ErrorL << "发送注销请求失败 " << ret;
+        return false;
+    }
+    return true;
+}
+
 void Gb28181Client::checkKeepAlive() {
-    if (!_registered) {
+    if (!isRegistered()) {
         return;
     }
 
-    auto now_time = toolkit::getCurrentMillisecond(true)/1000;
-    if (now_time - _last_keep_alive_time < _keepalive_interval) {
+    auto now_time = getCurrentMillisecond()/1000;
+
+    //三次心跳未响应
+    if (_last_keep_alive_time && now_time - _last_keep_alive_response_time >= 3*_keepalive_interval) {
+        InfoL << "心跳超时，发送注销请求";
+        if (sendUnRegisterMessage()) {
+            _status = ClientStatus::UNREGISTERING;
+        }
+        return;
+    }else if (now_time - _last_keep_alive_time < _keepalive_interval) {
         return;
     }
+
     _last_keep_alive_time = now_time;
 
     // Build KeepAlive XML body
@@ -231,8 +257,31 @@ void Gb28181Client::checkKeepAlive() {
     }
 }
 
-void Gb28181Client::checkRefreshRegister() {
+void Gb28181Client::onKeepAliveAnswer(int status_code) {
+    if (status_code == 200) {
+        InfoL << "心跳响应-成功 " << status_code;
+        _last_keep_alive_response_time = getCurrentMillisecond()/1000;
+    }else {
+        InfoL << "心跳响应-失败 " << status_code;
+    }
+}
 
+void Gb28181Client::checkRefreshRegister() {
+    if (!isRegistered()) {
+        return;
+    }
+
+    auto now_time = getCurrentMillisecond() / 1000;
+    auto elapsed = now_time - _last_register_time;
+
+    // 过期时间的 2/3 时触发刷新
+    if (elapsed < _expires * 2 / 3) {
+        return;
+    }
+
+    InfoL << "注册即将过期(" << elapsed << "/" << _expires << "s)，发送刷新注册";
+    sendRefreshRegister();
+    _last_register_time = now_time;
 }
 
 void Gb28181Client::onEventMessageNew(eXosip_event_t *event) {
@@ -387,21 +436,39 @@ onceToken Gb28181Client::lockContext() const {
     }};
 }
 
+void Gb28181Client::onMessageAnswered(eXosip_event_t *event) {
+    auto request = event->request;
+    auto response = event->response;
+    if (!request || !response) {
+        return;
+    }
+    auto request_doc = SipTools::sipMessageGetBodyXmlDocument(request);
+    auto root_node = request_doc.document_element();
+    const auto cmd_type = root_node.child_value(STR_CMD_TYPE);
+    if (osip_strcasecmp(cmd_type,STR_KEEP_ALIVE)==0) {
+        if (response) {
+            onKeepAliveAnswer(response->status_code);
+        }
+    }
+}
+
 void Gb28181Client::eventLoop() {
     DebugL << "Event thread started";
-
+    auto ptr = shared_from_this();
     while (_running) {
         eXosip_event_t *event = eXosip_event_wait(_ex_ctx, 1, 0);
 
         checkKeepAlive();
+        checkRefreshRegister();
 
         if (event == nullptr) {
             continue;
         }
 
-        eXosip_lock(_ex_ctx);
-        eXosip_default_action(_ex_ctx, event);
-        eXosip_unlock(_ex_ctx);
+        {
+            auto l = lockContext();
+            eXosip_default_action(_ex_ctx, event);
+        }
 
         // SipTools::printEvent(event,_user_id.c_str());
         auto request = event->request;
@@ -410,7 +477,8 @@ void Gb28181Client::eventLoop() {
         switch (event->type) {
             case EXOSIP_REGISTRATION_SUCCESS: {
                 InfoL << "注册成功";
-                _registered = true;
+                _status = ClientStatus::REGISTERED;
+                _last_register_time = getCurrentMillisecond()/1000;
                 auto cb = _on_register_func;
                 if (cb) {
                     cb(true, "");
@@ -434,7 +502,7 @@ void Gb28181Client::eventLoop() {
                     reason += ")";
                 }
                 ErrorL << "<<< " << reason << " >>>";
-                _registered = false;
+                _status = ClientStatus::UNREGISTER;
                 auto cb = _on_register_func;
                 if (cb) {
                     cb(false, reason);
@@ -448,6 +516,10 @@ void Gb28181Client::eventLoop() {
             }
             case EXOSIP_IN_SUBSCRIPTION_NEW: {
                 handleSubscribe(event);
+                break;
+            }
+            case EXOSIP_MESSAGE_ANSWERED: {
+                onMessageAnswered(event);
                 break;
             }
 

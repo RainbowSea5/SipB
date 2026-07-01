@@ -13,6 +13,16 @@ namespace gb28181 {
 static const char* STR_CMD_TYPE{"CmdType"};
 static const char* STR_CATA_LOG{"Catalog"};
 static const char* STR_DEVICE_INFO{"DeviceInfo"};
+static const char* STR_KEEP_ALIVE{"Keepalive"};
+
+enum class ClientStatus {
+    UN_INIT = 0,
+    INIT,
+    REGISTERING,
+    REGISTERED,
+    UNREGISTERING,
+    UNREGISTER,
+};
 
 class Gb28181Client :public std::enable_shared_from_this<Gb28181Client>{
 public:
@@ -30,7 +40,7 @@ public:
     void stop();
 
     /** 是否已注册成功 */
-    bool isRegistered() const { return _registered; }
+    bool isRegistered() const { return _status == ClientStatus::REGISTERED; }
 
     /** 订阅回调: event_type, expires */
     using SubscribeCallback = std::function<void(const std::string& event_type, int expires)>;
@@ -52,10 +62,16 @@ public:
         _on_catalog_query_cb = std::move(cb);
     }
 private:
+    void onMessageAnswered(eXosip_event_t * event);
+
     void eventLoop();
     void sendInitialRegister();
     void sendRefreshRegister();
+
+    bool sendUnRegisterMessage();
+
     void checkKeepAlive();
+    void onKeepAliveAnswer(int status_code);
     void checkRefreshRegister();
 
     void onEventMessageNew(eXosip_event_t* event);
@@ -66,6 +82,7 @@ private:
     void handleDeviceInfoQuery(eXosip_event_t* event, osip_message_t* request, const std::string& sn);
     toolkit::onceToken lockContext() const;
 
+    ClientStatus _status{ClientStatus::UN_INIT};
     // 订阅回调
     SubscribeCallback _on_subscribe_func;
     // 目录查询回调
@@ -77,7 +94,6 @@ private:
     toolkit::EventPoller::Ptr _poller;
     eXosip_t* _ex_ctx;
     std::atomic<bool> _running;
-    std::atomic<bool> _registered;
     std::thread _event_thread;
 
     // 注册参数缓存
@@ -88,16 +104,16 @@ private:
     std::string _local_ip;
     uint16_t _local_port;
 
-    // 心跳定时器（每次 eventLoop 轮询减 1）
     int _keepalive_interval{60};
-    uint64_t _last_keep_alive_time{0};
+    uint64_t _last_keep_alive_time{0},_last_keep_alive_response_time{0};
 
     // 序列号
     int _sn{0};
 
     std::string _sip_from,_sip_to,_sip_proxy;
 
-    int _expires,_register_id{};
+    int _expires,_register_id{0};
+    uint64_t _last_register_time{0};
 };
 }
 #endif // SIP_GB28181_H
