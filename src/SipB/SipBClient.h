@@ -74,6 +74,7 @@ private:
     void checkRefreshRegister();
     void checkSubscribe();
     void checkPositionSubscribe(SubscribeInfo& info);
+    void sendResourceReport();
 
     void onEventMessageNew(eXosip_event_t* event);
 
@@ -133,6 +134,7 @@ private:
     std::string _sip_from,_sip_to,_sip_proxy;
 
     bool _print_message{false};
+    bool _resource_reported{false};
 };
 }
 #endif // SIP_B_H

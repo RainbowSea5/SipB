@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by RainbowSea on 2026/7/2.
 //
 
@@ -63,7 +63,7 @@ struct DeviceInfo {
     std::string device_id;
     std::string name;
 
-    void appendItemToDocument(pugi::xml_node& doc,bool detail = false) const;
+    void appendItemToDocument(pugi::xml_node& doc,bool detail = false,bool use_attr = false) const;
 
 #pragma region 设备详细介绍
 
@@ -188,6 +188,8 @@ struct DeviceInfo {
     std::string password;
     //设备当前的运行状态：ON/OFF/UNKNOWN
     std::string status{"ON"};
+    std::string decoder_tag;
+    int sub_num{0};
 #pragma endregion
 
 #pragma region 位置

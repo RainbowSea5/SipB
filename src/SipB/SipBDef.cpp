@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by RainbowSea on 2026/7/2.
 //
 
@@ -26,7 +26,23 @@ std::string DeviceInfo::createDeviceInfoResponse(const std::string &c_device_id,
     return XmlTools::xmlDocumentToString(doc);
 }
 
-void DeviceInfo::appendItemToDocument(pugi::xml_node &doc, bool detail) const {
+void DeviceInfo::appendItemToDocument(pugi::xml_node &doc, bool detail, bool use_attr) const {
+    if (use_attr) {
+        // State Grid B Push_Resource format: Item uses attributes
+        auto item = doc.append_child("Item");
+        item.append_attribute("Code").set_value(device_id.c_str());
+        item.append_attribute("Name").set_value(name.c_str());
+        int sv = (status == "OFF" || status == "0") ? 0 : 1;
+        item.append_attribute("Status").set_value(sv);
+        if (!decoder_tag.empty()) {
+            item.append_attribute("DecoderTag").set_value(decoder_tag.c_str());
+        }
+        item.append_attribute("Longitude").set_value(longitude);
+        item.append_attribute("Latitude").set_value(latitude);
+        item.append_attribute("SubNum").set_value(sub_num);
+        return;
+    }
+
     auto item = doc.append_child("Item");
 
     // 基本字段（无论 detail 都包含）
@@ -67,43 +83,8 @@ void DeviceInfo::appendItemToDocument(pugi::xml_node &doc, bool detail) const {
     item.append_child("Password").append_child(pugi::node_pcdata).set_value(password.c_str());
 }
 
-MobilePositionInfo::MobilePositionInfo(std::string utc_time_str, double longitude, double latitude, double direction,
-                                       double altitude) : utc_time_str(std::move(utc_time_str)),
-                                                          longitude(longitude),
-                                                          latitude(latitude),
-                                                          direction(direction),
-                                                          altitude(altitude) {
-}
 
-MobilePositionInfo::MobilePositionInfo(uint32_t time_stamp, double longitude, double latitude, double direction,
-                                       double altitude) : longitude(longitude), latitude(latitude),
-                                                          direction(direction),
-                                                          altitude(altitude) {
-    std::tm tm{};
-    auto ts = static_cast<time_t>(time_stamp);
-    gmtime_r(&ts, &tm);
 
-    std::ostringstream oss;
-    oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-    utc_time_str = oss.str();
-}
-
-std::string MobilePositionInfo::createMobilePositionXml(const std::string& device_id,const std::string& sn_str) const {
-    pugi::xml_document doc;
-    auto root = doc.append_child(STR_XML_ROOT_NOTIFY);
-    root.append_child(STR_CMD_TYPE).append_child(pugi::node_pcdata).set_value(STR_MOBILE_POSITION);
-    root.append_child("SN").append_child(pugi::node_pcdata).set_value(sn_str);
-    root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(device_id);
-    root.append_child("Time").append_child(pugi::node_pcdata).set_value(utc_time_str);
-
-    root.append_child("Longitude").append_child(pugi::node_pcdata).set_value(std::to_string(longitude));
-    root.append_child("Latitude").append_child(pugi::node_pcdata).set_value(std::to_string(latitude));
-    root.append_child("Speed").append_child(pugi::node_pcdata).set_value(std::to_string(speed));
-    root.append_child("Direction").append_child(pugi::node_pcdata).set_value(std::to_string(direction));
-    root.append_child("Altitude").append_child(pugi::node_pcdata).set_value(std::to_string(altitude));
-
-    return XmlTools::xmlDocumentToString(doc);
-}
 
 SubscribeInfo::SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str, uint32_t interval)
     : cmd_type(std::move(cmd_type)),interval(interval),sn_str(std::move(sn_str)) {

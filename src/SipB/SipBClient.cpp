@@ -125,10 +125,6 @@ void SipBClient::stop() {
     InfoL << "stopped";
 }
 
-void SipBClient::setPositionInfo(MobilePositionInfo info) {
-    auto l = lockThis();
-    _position_info = std::move(info);
-}
 
 void SipBClient::sendInitialRegister() {
     std::string from = "sip:" + _device_id + "@" + _server_domain;
@@ -288,31 +284,42 @@ void SipBClient::checkSubscribe() {
             continue;
         }
 
-        if (info.isMobilePosition()) {
-            checkPositionSubscribe(info);
-        }else {
-
-        }
         ++it;
     }
 }
 
-void SipBClient::checkPositionSubscribe(SubscribeInfo &info) {
-    if (info.needReport()) {
-        info.last_report_time = getCurrentMillisecond()/1000;
-    }else {
+void SipBClient::sendResourceReport() {
+    if (!_on_catalog_query_cb) {
+        WarnL << "资源上报：未设置设备目录回调";
         return;
     }
 
-    std::string xml_str;
-    {
-        auto l = lockThis();
-        xml_str = _position_info.createMobilePositionXml(_device_id,info.sn_str);
-    }
-    InfoL << "上报位置";
-    sendMessage(xml_str,STR_METHOD_NOTIFY);
-}
+    auto weak_ptr = weakPtr();
+    _on_catalog_query_cb([weak_ptr](const vector<DeviceInfo> &vec, bool detail) {
+        auto client = weak_ptr.lock();
+        if (!client) {
+            return;
+        }
 
+        size_t total = vec.size();
+
+        pugi::xml_document doc;
+        auto root = doc.append_child("SIP_XML");
+        root.append_attribute("EventType").set_value("Push_Resource");
+        root.append_child("Code").append_child(pugi::node_pcdata).set_value(client->_device_id);
+
+        auto list_node = root.append_child("SubList");
+        for (auto& info : vec) {
+            info.appendItemToDocument(list_node, false, true);
+        }
+        list_node.append_attribute("SubNum").set_value(total);
+
+        auto xml_str = XmlTools::xmlDocumentToString(doc);
+        InfoL << "资源上报 " << total << " 个设备, body=" << xml_str.size() << " bytes";
+        client->sendMessage(xml_str, STR_METHOD_NOTIFY);
+        // InfoL << "资源上报完成，共 " << total << " 个设备";
+    });
+}
 void SipBClient::onEventMessageNew(eXosip_event_t *event) {
     if (!event || !event->request) {
         return;
@@ -451,10 +458,9 @@ void SipBClient::handleCatalogQuery(eXosip_event_t *event, osip_message_t *reque
             root.append_child("SN").append_child(pugi::node_pcdata).set_value(sn);
             root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(client->_device_id);
             root.append_child("SumNum").append_child(pugi::node_pcdata).set_value(to_string(vec.size()));
-
             auto list_node = root.append_child("DeviceList");
             list_node.append_attribute("Num").set_value(to_string(vec.size()));
-            for (auto& info:vec) {
+            for (auto& info : vec) {
                 info.appendItemToDocument(list_node);
             }
             auto xml_str = XmlTools::xmlDocumentToString(doc);
@@ -463,24 +469,6 @@ void SipBClient::handleCatalogQuery(eXosip_event_t *event, osip_message_t *reque
             client->sendMessage(xml_str);
         });
     }
-        // if (!body.empty()) {
-        //     auto l = lockContext();
-        //     osip_message_t *msg = nullptr;
-        //     int ret = eXosip_message_build_request(_ex_ctx, &msg, "MESSAGE",
-        //                                            _sip_to.c_str(),
-        //                                            _sip_from.c_str(),
-        //                                            nullptr);
-        //     if (ret == 0 && msg) {
-        //         osip_message_set_to(msg, _sip_to.c_str());
-        //         osip_message_set_content_type(msg, "Application/MANSCDP+xml");
-        //         osip_message_set_body(msg, body.c_str(), body.size());
-        //         eXosip_message_send_request(_ex_ctx, msg);
-        //         InfoL << "已发送 Catalog 响应 MESSAGE, SN: " << sn;
-        //     } else {
-        //         ErrorL << "构建 Catalog 响应 MESSAGE 失败, ret=" << ret;
-        //     }
-        // }
-    // }
 }
 
 void SipBClient::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
@@ -557,8 +545,6 @@ void SipBClient::onMessageAnswered(eXosip_event_t *event) {
     const auto cmd_type = root_node.child_value(STR_CMD_TYPE);
     if (osip_strcasecmp(cmd_type, STR_KEEP_ALIVE) == 0) {
         onKeepAliveAnswer(response->status_code);
-    }else if (osip_strcasecmp(cmd_type, STR_MOBILE_POSITION) == 0) {
-        InfoL << "上报位置-响应 " << response->status_code;
     }
 }
 
@@ -599,6 +585,10 @@ void SipBClient::eventLoop() {
                     cb(true, "");
                 }
                 checkKeepAlive();
+                if (!_resource_reported) {
+                    sendResourceReport();
+                    _resource_reported = true;
+                }
                 break;
             }
 
@@ -618,6 +608,7 @@ void SipBClient::eventLoop() {
                 }
                 ErrorL << "<<< " << reason << " >>>";
                 _status = ClientStatus::UNREGISTER;
+                _resource_reported = false;
                 auto cb = _on_register_func;
                 if (cb) {
                     cb(false, reason);
