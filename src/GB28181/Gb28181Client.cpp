@@ -125,6 +125,11 @@ void Gb28181Client::stop() {
     InfoL << "stopped";
 }
 
+void Gb28181Client::setPositionInfo(MobilePositionInfo info) {
+    auto l = lockThis();
+    _position_info = std::move(info);
+}
+
 // int ua_add_outboundproxy(osip_message_t *msg, const char *outboundproxy) {
 //     int ret = 0;
 //     char head[1024] = {0};
@@ -250,7 +255,7 @@ void Gb28181Client::checkKeepAlive() {
         osip_message_set_content_type(msg, "Application/MANSCDP+xml");
         osip_message_set_body(msg, body.c_str(), body.size());
         eXosip_message_send_request(_ex_ctx, msg);
-        InfoL << "心跳已发送, SN: " << sn;
+        DebugL << "心跳已发送, SN: " << sn;
     } else {
         ErrorL << "构建心跳 MESSAGE 失败, ret=" << ret;
     }
@@ -283,6 +288,40 @@ void Gb28181Client::checkRefreshRegister() {
     _last_register_time = now_time;
 }
 
+void Gb28181Client::checkSubscribe() {
+    for (auto it = _subscribe_list.begin();it!=_subscribe_list.end();) {
+        auto& info = *it;
+        if (info.overdue()) {
+            InfoL << "订阅到期，清理订阅 " << it->cmd_type;
+            it = _subscribe_list.erase(it);
+            continue;
+        }
+
+        if (info.isMobilePosition()) {
+            checkPositionSubscribe(info);
+        }else {
+
+        }
+        ++it;
+    }
+}
+
+void Gb28181Client::checkPositionSubscribe(SubscribeInfo &info) {
+    if (info.needReport()) {
+        info.last_report_time = getCurrentMillisecond()/1000;
+    }else {
+        return;
+    }
+
+    std::string xml_str;
+    {
+        auto l = lockThis();
+        xml_str = _position_info.createMobilePositionXml(_device_id,info.sn_str);
+    }
+    InfoL << "上报位置";
+    sendMessage(xml_str,STR_METHOD_NOTIFY);
+}
+
 void Gb28181Client::onEventMessageNew(eXosip_event_t *event) {
     if (!event || !event->request) {
         return;
@@ -306,6 +345,10 @@ void Gb28181Client::handleSubscribe(eXosip_event_t *event) {
     auto xml_doc = SipTools::sipMessageGetBodyXmlDocument(request);
     auto xml_root = xml_doc.document_element();
     std::string cmd_type = xml_root.child_value(STR_CMD_TYPE);
+    std::string sn_str = xml_root.child_value("SN");
+    auto interval_str = xml_root.child_value("Interval");
+
+    auto interval = atoi(interval_str);
 
     InfoL << "收到订阅, 类型 " << cmd_type;
 
@@ -349,6 +392,22 @@ void Gb28181Client::handleSubscribe(eXosip_event_t *event) {
         }
     } else if (expires <= 0) {
         ErrorL << "sssssssssssssssssss" << expires;
+    }
+
+    //多加三秒，防止服务器续订慢
+    expires+=3;
+
+    bool find = false;
+    for (auto& subscribe_info:_subscribe_list) {
+        if (subscribe_info.cmd_type == cmd_type) {
+            subscribe_info.update(sn_str,expires,interval);
+            find = true;
+            break;
+        }
+    }
+    if (!find) {
+        SubscribeInfo info(cmd_type,expires,sn_str, interval);
+        _subscribe_list.push_back(info);
     }
 
     //这里通知上层
@@ -409,7 +468,7 @@ void Gb28181Client::handleCatalogQuery(eXosip_event_t *event, osip_message_t *re
             }
             auto xml_str = XmlTools::xmlDocumentToString(doc);
             InfoL << "[CataLog]上报设备信息";
-            DebugL << xml_str;
+            // DebugL << xml_str;
             client->sendMessage(xml_str);
         });
     }
@@ -453,7 +512,7 @@ void Gb28181Client::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t 
             }
             auto xml_str = info.createDeviceInfoResponse(client->_device_id, sn);
             InfoL << "[DeviceInfo]上报设备信息";
-            DebugL << xml_str;
+            // DebugL << xml_str;
             client->sendMessage(xml_str);
         });
     }
@@ -470,16 +529,20 @@ onceToken Gb28181Client::lockContext() const {
     };
 }
 
+std::unique_lock<std::mutex> Gb28181Client::lockThis(){
+    return std::unique_lock(_mtx);
+}
+
 std::weak_ptr<Gb28181Client> Gb28181Client::weakPtr() {
     return shared_from_this();
 }
 
-void Gb28181Client::sendMessage(const std::string &body_str) {
+void Gb28181Client::sendMessage(const std::string &body_str,const std::string& method) {
     if (!isRegistered())
         return;
     auto l = lockContext();
     osip_message_t *msg{nullptr};
-    auto ret = eXosip_message_build_request(_ex_ctx, &msg, STR_METHOD_MESSAGE,
+    auto ret = eXosip_message_build_request(_ex_ctx, &msg, method.c_str(),
                                             _sip_proxy.c_str(), _sip_from.c_str(), nullptr);
     if (ret || msg == nullptr) {
         ErrorL << "构建消息失败 " << body_str;
@@ -503,6 +566,8 @@ void Gb28181Client::onMessageAnswered(eXosip_event_t *event) {
     const auto cmd_type = root_node.child_value(STR_CMD_TYPE);
     if (osip_strcasecmp(cmd_type, STR_KEEP_ALIVE) == 0) {
         onKeepAliveAnswer(response->status_code);
+    }else if (osip_strcasecmp(cmd_type, STR_MOBILE_POSITION) == 0) {
+        InfoL << "上报位置-响应 " << response->status_code;
     }
 }
 
@@ -513,7 +578,10 @@ void Gb28181Client::eventLoop() {
         eXosip_event_t *event = eXosip_event_wait(_ex_ctx, 1, 0);
 
         checkKeepAlive();
-        checkRefreshRegister();
+        if (isRegistered()) {
+            checkRefreshRegister();
+            checkSubscribe();
+        }
 
         if (event == nullptr) {
             continue;
@@ -524,7 +592,9 @@ void Gb28181Client::eventLoop() {
             eXosip_default_action(_ex_ctx, event);
         }
 
-        // SipTools::printEvent(event,_user_id.c_str());
+        if (_print_message) {
+            SipTools::printEvent(event,_user_id.c_str());
+        }
         auto request = event->request;
         auto response = event->response;
 

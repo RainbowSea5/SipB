@@ -4,7 +4,12 @@
 
 #include "GB28181/Gb28181Client.h"
 #include "SipB/SipClient.h"
+#include "XmlTools/XmlTools.h"
 static std::atomic<bool> g_running(true);
+
+
+
+
 
 void signalHandler(int sig) {
     WarnL << "\n[Main] Caught signal " << sig << ", shutting down...";
@@ -16,7 +21,7 @@ int main() {
     signal(SIGTERM, signalHandler);
 
     auto client = std::make_shared<gb28181::Gb28181Client>(nullptr);
-
+    // client->openDebuggerLog();
     client->setOnInit([]() {
 
     });
@@ -48,6 +53,23 @@ int main() {
            }
            invoker(list,false);
        }
+    });
+    uint64_t position_end_time = 0;
+    auto wptr = client->weakPtr();
+    client->setOnSubscribe([wptr,&position_end_time](const std::string& event_type, int expires) {
+        if (event_type == gb28181::STR_MOBILE_POSITION) {
+            position_end_time = toolkit::getCurrentMillisecond()/1000 + expires;
+            // 实际 需要开启定位，不断更新位置信息
+
+            InfoL << "收到位置订阅 时长"<< expires;
+            auto client = wptr.lock();
+            if (client) {
+                uint32_t time = toolkit::getCurrentMillisecond(true)/1000;
+                client->setPositionInfo({time,117.13156181,36.67536791,0,0});
+            }
+        }else {
+            InfoL << "收到订阅 "<<event_type <<" " << expires;
+        }
     });
     // ========= 1. 初始化 eXosip，监听本地 UDP 5060 端口 =========
     if (!client->init(true,"wct")) {

@@ -13,11 +13,11 @@ add_subdirectory(3rd/ZLToolKit)
 add_subdirectory(src)
 
 
-add_executable(sipB
+add_executable(gb28181
     main.cpp
 )
 
-target_link_libraries(sipB
+target_link_libraries(gb28181
         PRIVATE
     /usr/local/lib/libeXosip2.so
     /usr/local/lib/libosip2.so

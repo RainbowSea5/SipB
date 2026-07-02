@@ -59,7 +59,7 @@ bool isXml(const osip_message_t *msg)
 }
 
 pugi::xml_document sipMessageGetBodyXmlDocument(const osip_message_t *msg) {
-    if (msg == nullptr || !isXml(msg)) {
+    if (msg == nullptr ){//|| !isXml(msg)) {
         return {};
     }
 
@@ -94,16 +94,18 @@ void printEvent(eXosip_event_t *event, const char *user_id) {
         return;
     }
     if (strcmp(cmd_type, "MobilePosition")==0) {
-        if (response && response->content_length && strcmp(response->content_length->value, "0") == 0) {
-            PrintD("上报位置，响应无消息体, 状态码 = %d", response->status_code);
-            return;
-        }
+        // if (response && response->content_length && strcmp(response->content_length->value, "0") == 0) {
+        //     PrintD("上报位置，响应无消息体, 状态码 = %d", response->status_code);
+        //     return;
+        // }
         if (MSG_IS_SUBSCRIBE(request)) {
             PrintD("Request:服务端 发起/刷新 位置订阅, Response: Empty");
             return;
         }
     }
-    PrintD("Request:%s\n%s", is_my_request?"是设备发出的":"不是设备发出", request_str.empty()?"Empty":request_str.c_str());
-    PrintD("Response:\n%s", response_str.empty()?"Empty":response_str.c_str());
+    PrintD("[%d] Request:%s\n%s\nResponse:\n%s",
+        event->type,
+        is_my_request?"是设备发出的":"不是设备发出", request_str.empty()?"Empty":request_str.c_str()
+        ,response_str.empty()?"Empty":response_str.c_str());
 }
 }

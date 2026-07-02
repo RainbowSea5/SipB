@@ -3,6 +3,10 @@
 //
 #include "GB28181Def.h"
 
+#include <iomanip>
+#include <utility>
+
+#include "Network/BufferSock.h"
 #include "XmlTools/XmlTools.h"
 
 namespace gb28181 {
@@ -62,4 +66,69 @@ void DeviceInfo::appendItemToDocument(pugi::xml_node &doc, bool detail) const {
     item.append_child("Password").append_child(pugi::node_pcdata).set_value(password.c_str());
 }
 
+MobilePositionInfo::MobilePositionInfo(std::string utc_time_str, double longitude, double latitude, double direction,
+                                       double altitude) : utc_time_str(std::move(utc_time_str)),
+                                                          longitude(longitude),
+                                                          latitude(latitude),
+                                                          direction(direction),
+                                                          altitude(altitude) {
+}
+
+MobilePositionInfo::MobilePositionInfo(uint32_t time_stamp, double longitude, double latitude, double direction,
+                                       double altitude) : longitude(longitude), latitude(latitude),
+                                                          direction(direction),
+                                                          altitude(altitude) {
+    std::tm tm{};
+    auto ts = static_cast<time_t>(time_stamp);
+    gmtime_r(&ts, &tm);
+
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    utc_time_str = oss.str();
+}
+
+std::string MobilePositionInfo::createMobilePositionXml(const std::string& device_id,const std::string& sn_str) const {
+    pugi::xml_document doc;
+    auto root = doc.append_child(STR_XML_ROOT_NOTIFY);
+    root.append_child(STR_CMD_TYPE).append_child(pugi::node_pcdata).set_value(STR_MOBILE_POSITION);
+    root.append_child("SN").append_child(pugi::node_pcdata).set_value(sn_str);
+    root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(device_id);
+    root.append_child("Time").append_child(pugi::node_pcdata).set_value(utc_time_str);
+
+    root.append_child("Longitude").append_child(pugi::node_pcdata).set_value(std::to_string(longitude));
+    root.append_child("Latitude").append_child(pugi::node_pcdata).set_value(std::to_string(latitude));
+    root.append_child("Speed").append_child(pugi::node_pcdata).set_value(std::to_string(speed));
+    root.append_child("Direction").append_child(pugi::node_pcdata).set_value(std::to_string(direction));
+    root.append_child("Altitude").append_child(pugi::node_pcdata).set_value(std::to_string(altitude));
+
+    return XmlTools::xmlDocumentToString(doc);
+}
+
+SubscribeInfo::SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str, uint32_t interval)
+    : cmd_type(std::move(cmd_type)),interval(interval),sn_str(std::move(sn_str)) {
+
+    expiration_time = toolkit::getCurrentMillisecond()/1000 + expires;
+}
+
+SubscribeInfo::SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str)
+    : cmd_type(std::move(cmd_type)),sn_str(std::move(sn_str)) {
+
+    expiration_time = toolkit::getCurrentMillisecond()/1000 + expires;
+}
+
+void SubscribeInfo::update(const std::string &c_sn_str, uint32_t expires, uint32_t c_interval) {
+    if (this->sn_str != sn_str) {
+        this->sn_str = c_sn_str;
+    }
+    expiration_time = toolkit::getCurrentMillisecond()/1000 + expires;
+    this->interval = c_interval;
+}
+
+bool SubscribeInfo::overdue() const {
+    return expiration_time < toolkit::getCurrentMillisecond()/1000;
+}
+
+bool SubscribeInfo::needReport() const {
+    return toolkit::getCurrentMillisecond()/1000 - last_report_time >= interval;
+}
 }

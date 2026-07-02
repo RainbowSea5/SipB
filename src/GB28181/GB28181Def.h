@@ -4,6 +4,7 @@
 
 #ifndef SIPB_GB28181DEF_H
 #define SIPB_GB28181DEF_H
+#include <cstdint>
 #include <iostream>
 #include <utility>
 
@@ -12,12 +13,19 @@
 namespace gb28181 {
 
 static const char* STR_CMD_TYPE{"CmdType"};
+
 static const char* STR_CATA_LOG{"Catalog"};
 static const char* STR_DEVICE_INFO{"DeviceInfo"};
 static const char* STR_KEEP_ALIVE{"Keepalive"};
+
 static const char* STR_METHOD_MESSAGE{"MESSAGE"};
+static const char* STR_METHOD_NOTIFY{"NOTIFY"};
+
 static const char* STR_XML_ROOT_RESPONSE{"Response"};
 static const char* STR_XML_ROOT_QUERY{"Query"};
+static const char* STR_XML_ROOT_NOTIFY{"Notify"};
+
+static const char* STR_MOBILE_POSITION{"MobilePosition"};
 
 
 enum class ClientStatus {
@@ -185,6 +193,40 @@ struct DeviceInfo {
     double longitude = 0.0;
     double latitude = 0.0;
 #pragma endregion
+};
+
+struct MobilePositionInfo {
+    MobilePositionInfo() = default;
+    MobilePositionInfo(std::string utc_time_str, double longitude, double latitude, double direction, double altitude);
+
+    MobilePositionInfo(uint32_t time_stamp, double longitude, double latitude, double direction, double altitude);
+
+    [[nodiscard]] std::string createMobilePositionXml(const std::string& device_id,const std::string& sn_str) const;
+
+    std::string utc_time_str{};
+    //经度
+    double longitude{};
+    //纬度
+    double latitude{};
+    //方向，高度
+    double direction{},altitude{},speed{0};
+};
+
+struct SubscribeInfo {
+    SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str,uint32_t interval);
+
+    SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str);
+
+    [[nodiscard]] bool isMobilePosition() const { return cmd_type == STR_MOBILE_POSITION;}
+    void update(const std::string& sn_str, uint32_t expires,uint32_t interval = 0);
+    bool overdue() const;
+    bool needReport() const;
+
+    std::string cmd_type;
+    // uint32_t expires;
+    uint32_t interval{0};
+    std::string sn_str;
+    uint64_t expiration_time,last_report_time{0};
 };
 
 }
