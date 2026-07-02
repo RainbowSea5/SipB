@@ -1,29 +1,29 @@
-﻿#include "Gb28181Client.h"
+﻿#include "SipBClient.h"
 
 #include <iostream>
 #include <cstring>
+#include <cstdlib>
 #include <utility>
 #include <sys/socket.h>   // AF_INET
 #include <netinet/in.h>   // IPPROTO_UDP
-#include <openssl/evp.h>
 
 #include "SipTools/SipTools.h"
+#include "XmlTools/XmlTools.h"
 using namespace toolkit;
 using namespace std;
-
-namespace gb28181 {
-Gb28181Client::Gb28181Client(EventPoller::Ptr poller)
+namespace sipB {
+SipBClient::SipBClient(EventPoller::Ptr poller)
     : _ex_ctx(nullptr)
       , _running(false)
       , _server_port(5060)
       , _poller(std::move(poller)) {
 }
 
-Gb28181Client::~Gb28181Client() {
+SipBClient::~SipBClient() {
     stop();
 }
 
-bool Gb28181Client::init(bool is_udp, const std::string &user_agent, int local_port) {
+bool SipBClient::init(bool is_udp, const std::string &user_agent, int local_port) {
     getCurrentMillisecond();
     if (_ex_ctx) {
         WarnL << "已经初始化了";
@@ -59,7 +59,7 @@ bool Gb28181Client::init(bool is_udp, const std::string &user_agent, int local_p
     return true;
 }
 
-bool Gb28181Client::startRegister(const std::string &server_ip, int server_port, const std::string &device_code,
+bool SipBClient::startRegister(const std::string &server_ip, int server_port, const std::string &device_code,
                                   const std::string &server_id, const std::string &domain, const std::string &auth_user,
                                   const std::string &auth_pass, int expires) {
     if (_ex_ctx == nullptr) {
@@ -93,11 +93,11 @@ bool Gb28181Client::startRegister(const std::string &server_ip, int server_port,
 
     _running = true;
     sendInitialRegister();
-    _event_thread = std::thread(&Gb28181Client::eventLoop, this);
+    _event_thread = std::thread(&SipBClient::eventLoop, this);
     return true;
 }
 
-void Gb28181Client::stop() {
+void SipBClient::stop() {
     if (!_running) {
         return;
     }
@@ -125,29 +125,20 @@ void Gb28181Client::stop() {
     InfoL << "stopped";
 }
 
-void Gb28181Client::setPositionInfo(MobilePositionInfo info) {
+void SipBClient::setPositionInfo(MobilePositionInfo info) {
     auto l = lockThis();
     _position_info = std::move(info);
 }
 
-// int ua_add_outboundproxy(osip_message_t *msg, const char *outboundproxy) {
-//     int ret = 0;
-//     char head[1024] = {0};
-//
-//     snprintf(head, sizeof(head) - 1, "<%s;lr>", outboundproxy);
-//
-//     osip_list_special_free(&msg->routes, reinterpret_cast<void (*)(void *)>(osip_route_free));
-//     ret = osip_message_set_route(msg, head);
-//     return ret;
-// }
-void Gb28181Client::sendInitialRegister() {
-    eXosip_lock(_ex_ctx);
+void SipBClient::sendInitialRegister() {
     std::string from = "sip:" + _device_id + "@" + _server_domain;
     std::string proxy = "sip:" + _server_id + "@" + _server_ip + ":" + std::to_string(_server_port);
     _sip_proxy = proxy;
     _sip_from = from;
-    _sip_to = "sip:" + _server_id + "@" + _server_domain;
+    _sip_to = _sip_proxy;
 
+
+    auto l = lockContext();
     osip_message_t *reg_message = nullptr;
     int ret = eXosip_register_build_initial_register(_ex_ctx, from.c_str(), proxy.c_str(),
                                                      nullptr, _expires, &reg_message);
@@ -177,11 +168,10 @@ void Gb28181Client::sendInitialRegister() {
     } else {
         InfoL << "Initial REGISTER sent (expires=" << _expires << "s)";
     }
-    eXosip_unlock(_ex_ctx);
     _status = ClientStatus::REGISTERING;
 }
 
-void Gb28181Client::sendRefreshRegister() {
+void SipBClient::sendRefreshRegister() {
     auto l = lockContext();
     osip_message_t *reg = nullptr;
     int ret = eXosip_register_build_register(_ex_ctx, _register_id, _expires, &reg);
@@ -193,12 +183,12 @@ void Gb28181Client::sendRefreshRegister() {
     }
 }
 
-bool Gb28181Client::sendUnRegisterMessage() {
+bool SipBClient::sendUnRegisterMessage() {
     if (!_ex_ctx || !_register_id) {
         return false;
     }
-    auto l = lockContext();
 
+    auto l = lockContext();
     osip_message_t *reg = nullptr;
     int ret = eXosip_register_build_register(_ex_ctx, _register_id, 0, &reg);
     if (ret || !reg) {
@@ -213,7 +203,7 @@ bool Gb28181Client::sendUnRegisterMessage() {
     return true;
 }
 
-void Gb28181Client::checkKeepAlive() {
+void SipBClient::checkKeepAlive() {
     if (!isRegistered()) {
         return;
     }
@@ -262,7 +252,7 @@ void Gb28181Client::checkKeepAlive() {
     }
 }
 
-void Gb28181Client::onKeepAliveAnswer(int status_code) {
+void SipBClient::onKeepAliveAnswer(int status_code) {
     if (status_code == 200) {
         InfoL << "心跳响应-成功 " << status_code;
         _last_keep_alive_response_time = getCurrentMillisecond() / 1000;
@@ -271,7 +261,7 @@ void Gb28181Client::onKeepAliveAnswer(int status_code) {
     }
 }
 
-void Gb28181Client::checkRefreshRegister() {
+void SipBClient::checkRefreshRegister() {
     if (!isRegistered()) {
         return;
     }
@@ -289,7 +279,7 @@ void Gb28181Client::checkRefreshRegister() {
     _last_register_time = now_time;
 }
 
-void Gb28181Client::checkSubscribe() {
+void SipBClient::checkSubscribe() {
     for (auto it = _subscribe_list.begin();it!=_subscribe_list.end();) {
         auto& info = *it;
         if (info.overdue()) {
@@ -307,7 +297,7 @@ void Gb28181Client::checkSubscribe() {
     }
 }
 
-void Gb28181Client::checkPositionSubscribe(SubscribeInfo &info) {
+void SipBClient::checkPositionSubscribe(SubscribeInfo &info) {
     if (info.needReport()) {
         info.last_report_time = getCurrentMillisecond()/1000;
     }else {
@@ -323,7 +313,7 @@ void Gb28181Client::checkPositionSubscribe(SubscribeInfo &info) {
     sendMessage(xml_str,STR_METHOD_NOTIFY);
 }
 
-void Gb28181Client::onEventMessageNew(eXosip_event_t *event) {
+void SipBClient::onEventMessageNew(eXosip_event_t *event) {
     if (!event || !event->request) {
         return;
     }
@@ -340,7 +330,7 @@ void Gb28181Client::onEventMessageNew(eXosip_event_t *event) {
     }
 }
 
-void Gb28181Client::handleSubscribe(eXosip_event_t *event) {
+void SipBClient::handleSubscribe(eXosip_event_t *event) {
     auto request = event->request;
 
     auto xml_doc = SipTools::sipMessageGetBodyXmlDocument(request);
@@ -417,7 +407,7 @@ void Gb28181Client::handleSubscribe(eXosip_event_t *event) {
     }
 }
 
-void Gb28181Client::handleMessage(eXosip_event_t *event) {
+void SipBClient::handleMessage(eXosip_event_t *event) {
     auto request = event->request;
     auto xml_doc = SipTools::sipMessageGetBodyXmlDocument(request);
     auto xml_root = xml_doc.document_element();
@@ -433,7 +423,7 @@ void Gb28181Client::handleMessage(eXosip_event_t *event) {
     }
 }
 
-void Gb28181Client::handleCatalogQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
+void SipBClient::handleCatalogQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
     InfoL << "Catalog query, SN: " << sn;
 
     // 1. Send 200 OK to acknowledge
@@ -493,7 +483,7 @@ void Gb28181Client::handleCatalogQuery(eXosip_event_t *event, osip_message_t *re
     // }
 }
 
-void Gb28181Client::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
+void SipBClient::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
     InfoL << "[DeviceInfo] 设备信息查询, SN: " << sn;
 
     {
@@ -519,7 +509,7 @@ void Gb28181Client::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t 
     }
 }
 
-onceToken Gb28181Client::lockContext() const {
+onceToken SipBClient::lockContext() const {
     return {
         [this]() {
             eXosip_lock(_ex_ctx);
@@ -530,15 +520,15 @@ onceToken Gb28181Client::lockContext() const {
     };
 }
 
-std::unique_lock<std::mutex> Gb28181Client::lockThis(){
+std::unique_lock<std::mutex> SipBClient::lockThis(){
     return std::unique_lock(_mtx);
 }
 
-std::weak_ptr<Gb28181Client> Gb28181Client::weakPtr() {
+std::weak_ptr<SipBClient> SipBClient::weakPtr() {
     return shared_from_this();
 }
 
-void Gb28181Client::sendMessage(const std::string &body_str,const std::string& method) {
+void SipBClient::sendMessage(const std::string &body_str,const std::string& method) {
     if (!isRegistered())
         return;
     auto l = lockContext();
@@ -556,7 +546,7 @@ void Gb28181Client::sendMessage(const std::string &body_str,const std::string& m
     }
 }
 
-void Gb28181Client::onMessageAnswered(eXosip_event_t *event) {
+void SipBClient::onMessageAnswered(eXosip_event_t *event) {
     auto request = event->request;
     auto response = event->response;
     if (!request || !response) {
@@ -572,7 +562,7 @@ void Gb28181Client::onMessageAnswered(eXosip_event_t *event) {
     }
 }
 
-void Gb28181Client::eventLoop() {
+void SipBClient::eventLoop() {
     DebugL << "Event thread started";
     auto ptr = shared_from_this();
     while (_running) {

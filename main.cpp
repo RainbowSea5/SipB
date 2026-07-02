@@ -3,7 +3,7 @@
 #include <atomic>
 
 #include "GB28181/Gb28181Client.h"
-#include "SipB/SipClient.h"
+#include "SipB/SipBClient.h"
 #include "XmlTools/XmlTools.h"
 static std::atomic<bool> g_running(true);
 
