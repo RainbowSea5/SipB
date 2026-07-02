@@ -539,9 +539,9 @@ std::weak_ptr<Gb28181Client> Gb28181Client::weakPtr() {
 }
 
 void Gb28181Client::sendMessage(const std::string &body_str,const std::string& method) {
+    auto l = lockContext();
     if (!isRegistered())
         return;
-    auto l = lockContext();
     osip_message_t *msg{nullptr};
     auto ret = eXosip_message_build_request(_ex_ctx, &msg, method.c_str(),
                                             _sip_proxy.c_str(), _sip_from.c_str(), nullptr);

@@ -297,12 +297,13 @@ void SipBClient::sendResourceReport() {
     auto weak_ptr = weakPtr();
     _on_catalog_query_cb([weak_ptr](const vector<DeviceInfo> &vec, bool detail) {
         auto client = weak_ptr.lock();
-        if (!client) {
+        if (!client || !client->isRegistered()) {
             return;
         }
 
         size_t total = vec.size();
 
+        //这里默认保证 设备只有一个，不再分段分多条消息发送
         pugi::xml_document doc;
         auto root = doc.append_child("SIP_XML");
         root.append_attribute("EventType").set_value("Push_Resource");
@@ -517,9 +518,9 @@ std::weak_ptr<SipBClient> SipBClient::weakPtr() {
 }
 
 void SipBClient::sendMessage(const std::string &body_str,const std::string& method) {
+    auto l = lockContext();
     if (!isRegistered())
         return;
-    auto l = lockContext();
     osip_message_t *msg{nullptr};
     auto ret = eXosip_message_build_request(_ex_ctx, &msg, method.c_str(),
                                             _sip_proxy.c_str(), _sip_from.c_str(), nullptr);
