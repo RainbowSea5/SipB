@@ -11,6 +11,7 @@
 #include "XmlTools/XmlTools.h"
 using namespace toolkit;
 using namespace std;
+
 namespace sipB {
 SipBClient::SipBClient(EventPoller::Ptr poller)
     : _ex_ctx(nullptr)
@@ -60,8 +61,8 @@ bool SipBClient::init(bool is_udp, const std::string &user_agent, int local_port
 }
 
 bool SipBClient::startRegister(const std::string &server_ip, int server_port, const std::string &device_code,
-                                  const std::string &server_id, const std::string &domain, const std::string &auth_user,
-                                  const std::string &auth_pass, int expires) {
+                               const std::string &server_id, const std::string &domain, const std::string &auth_user,
+                               const std::string &auth_pass, int expires) {
     if (_ex_ctx == nullptr) {
         ErrorL << "eXosip not initialized";
         return false;
@@ -123,6 +124,31 @@ void SipBClient::stop() {
 
     // _registered = false;
     InfoL << "stopped";
+}
+
+void SipBClient::setOnSubscribe(SubscribeCallback cb) {
+    checkNotRegister();
+    _on_subscribe_func = std::move(cb);
+}
+
+void SipBClient::setOnInit(std::function<void()> on_init_func) {
+    checkNotRegister();
+    _on_init_func = std::move(on_init_func);
+}
+
+void SipBClient::setOnRegister(std::function<void(bool success, const std::string &reason)> on_register_func) {
+    checkNotRegister();
+    _on_register_func = std::move(on_register_func);
+}
+
+void SipBClient::setOnQueryAllResource(OnQueryAllResource cb) {
+    checkNotRegister();
+    _on_query_all_resource = std::move(cb);
+}
+
+void SipBClient::setOnQueryResourceInfo(OnQueryResourceInfoCallback cb) {
+    checkNotRegister();
+    _on_query_resource_info_cb = std::move(cb);
 }
 
 
@@ -199,64 +225,6 @@ bool SipBClient::sendUnRegisterMessage() {
     return true;
 }
 
-void SipBClient::checkKeepAlive() {
-    if (!isRegistered()) {
-        return;
-    }
-
-    auto now_time = getCurrentMillisecond() / 1000;
-
-    //三次心跳未响应
-    if (_last_keep_alive_time && now_time - _last_keep_alive_response_time >= 3 * _keepalive_interval) {
-        InfoL << "心跳超时，发送注销请求";
-        if (sendUnRegisterMessage()) {
-            _status = ClientStatus::UNREGISTERING;
-        }
-        return;
-    } else if (now_time - _last_keep_alive_time < _keepalive_interval) {
-        return;
-    }
-
-    _last_keep_alive_time = now_time;
-
-    // Build KeepAlive XML body
-    auto sn = _sn++;
-    pugi::xml_document doc;
-    auto root = doc.append_child("Notify");
-    root.append_child("CmdType").append_child(pugi::node_pcdata).set_value("Keepalive");
-    root.append_child("SN").append_child(pugi::node_pcdata).set_value(std::to_string(sn).c_str());
-    root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(_device_id.c_str());
-    root.append_child("Status").append_child(pugi::node_pcdata).set_value("OK");
-
-    std::string body = XmlTools::xmlDocumentToString(doc);
-
-    // Build and send MESSAGE
-    auto l = lockContext();
-    osip_message_t *msg = nullptr;
-    int ret = eXosip_message_build_request(_ex_ctx, &msg, "MESSAGE",
-                                           _sip_proxy.c_str(),
-                                           _sip_from.c_str(),
-                                           nullptr);
-    if (ret == 0 && msg) {
-        osip_message_set_to(msg, _sip_to.c_str());
-        osip_message_set_content_type(msg, "Application/MANSCDP+xml");
-        osip_message_set_body(msg, body.c_str(), body.size());
-        eXosip_message_send_request(_ex_ctx, msg);
-        DebugL << "心跳已发送, SN: " << sn;
-    } else {
-        ErrorL << "构建心跳 MESSAGE 失败, ret=" << ret;
-    }
-}
-
-void SipBClient::onKeepAliveAnswer(int status_code) {
-    if (status_code == 200) {
-        InfoL << "心跳响应-成功 " << status_code;
-        _last_keep_alive_response_time = getCurrentMillisecond() / 1000;
-    } else {
-        InfoL << "心跳响应-失败 " << status_code;
-    }
-}
-
 void SipBClient::checkRefreshRegister() {
     if (!isRegistered()) {
         return;
@@ -276,8 +244,8 @@ void SipBClient::checkRefreshRegister() {
 }
 
 void SipBClient::checkSubscribe() {
-    for (auto it = _subscribe_list.begin();it!=_subscribe_list.end();) {
-        auto& info = *it;
+    for (auto it = _subscribe_list.begin(); it != _subscribe_list.end();) {
+        auto &info = *it;
         if (info.overdue()) {
             InfoL << "订阅到期，清理订阅 " << it->cmd_type;
             it = _subscribe_list.erase(it);
@@ -289,13 +257,13 @@ void SipBClient::checkSubscribe() {
 }
 
 void SipBClient::sendResourceReport() {
-    if (!_on_catalog_query_cb) {
+    if (!_on_query_all_resource) {
         WarnL << "资源上报：未设置设备目录回调";
         return;
     }
 
     auto weak_ptr = weakPtr();
-    _on_catalog_query_cb([weak_ptr](const vector<DeviceInfo> &vec, bool detail) {
+    _on_query_all_resource([weak_ptr](const vector<DeviceInfo> &vec) {
         auto client = weak_ptr.lock();
         if (!client || !client->isRegistered()) {
             return;
@@ -310,17 +278,18 @@ void SipBClient::sendResourceReport() {
         root.append_child("Code").append_child(pugi::node_pcdata).set_value(client->_device_id);
 
         auto list_node = root.append_child("SubList");
-        for (auto& info : vec) {
-            info.appendItemToDocument(list_node, false, true);
+        for (auto &info: vec) {
+            info.appendItemToDocument(list_node);
         }
         list_node.append_attribute("SubNum").set_value(total);
 
         auto xml_str = XmlTools::xmlDocumentToString(doc);
         InfoL << "资源上报 " << total << " 个设备, body=" << xml_str.size() << " bytes";
         client->sendMessage(xml_str, STR_METHOD_NOTIFY);
-        // InfoL << "资源上报完成，共 " << total << " 个设备";
+        InfoL << "资源上报完成，共 " << total << " 个设备";
     });
 }
+
 void SipBClient::onEventMessageNew(eXosip_event_t *event) {
     if (!event || !event->request) {
         return;
@@ -394,18 +363,18 @@ void SipBClient::handleSubscribe(eXosip_event_t *event) {
     }
 
     //多加三秒，防止服务器续订慢
-    expires+=3;
+    expires += 3;
 
     bool find = false;
-    for (auto& subscribe_info:_subscribe_list) {
+    for (auto &subscribe_info: _subscribe_list) {
         if (subscribe_info.cmd_type == cmd_type) {
-            subscribe_info.update(sn_str,expires,interval);
+            subscribe_info.update(sn_str, expires, interval);
             find = true;
             break;
         }
     }
     if (!find) {
-        SubscribeInfo info(cmd_type,expires,sn_str, interval);
+        SubscribeInfo info(cmd_type, expires, sn_str, interval);
         _subscribe_list.push_back(info);
     }
 
@@ -419,84 +388,167 @@ void SipBClient::handleMessage(eXosip_event_t *event) {
     auto request = event->request;
     auto xml_doc = SipTools::sipMessageGetBodyXmlDocument(request);
     auto xml_root = xml_doc.document_element();
-    auto cmd_type = xml_root.child_value(STR_CMD_TYPE);
 
-    InfoL << "收到Message消息, CmdType " << cmd_type;
-    if (osip_strcasecmp(cmd_type, STR_CATA_LOG) == 0) {
-        handleCatalogQuery(event, request, xml_root.child_value("SN"));
-    } else if (osip_strcasecmp(cmd_type, STR_DEVICE_INFO) == 0) {
-        handleDeviceInfoQuery(event, request, xml_root.child_value("SN"));
+    if (!xml_doc || !xml_root || strcmp(xml_root.name(), "SIP_XML") != 0) {
+        return;
+    }
+
+    auto event_type = xml_root.attribute("EventType").value();
+    if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_RESOURCE) == 0) {
+        handleResourceRequest(event, xml_root);
     } else {
-        WarnL << "未实现的类型";
+        WarnL << "未实现的 EventType: " << event_type;
     }
 }
 
-void SipBClient::handleCatalogQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
-    InfoL << "Catalog query, SN: " << sn;
+void SipBClient::handleResourceRequest(eXosip_event_t *event, const pugi::xml_node &xml_root) {
+    auto item_node = xml_root.child("Item");
+    std::string code = item_node.attribute("Code").value();
+    int from_index = atoi(item_node.attribute("FromIndex").value());
+    int to_index = atoi(item_node.attribute("ToIndex").value());
+    auto tid = event->tid;
 
-    // 1. Send 200 OK to acknowledge
-    {
-        auto l = lockContext();
-        osip_message_t *answer = nullptr;
-        if (eXosip_message_build_answer(_ex_ctx, event->tid, 200, &answer) == 0 && answer) {
-            eXosip_message_send_answer(_ex_ctx, event->tid, 200, answer);
-            InfoL << "已响应 Catalog 查询 200 OK";
+    InfoL << "[ResourceRequest] Code: " << code << ", From: " << from_index << ", To: " << to_index;
+
+    if (_on_query_resource_info_cb) {
+        _wait_answer_event[event->tid] = event;
+
+        auto weak_ptr = weakPtr();
+
+        auto cb = [weak_ptr, code, from_index, to_index,tid](const vector<DeviceInfo> &items, int real_num) {
+            auto client = weak_ptr.lock();
+            if (!client) return;
+            PrintD("查询资源设备共%d个", items.size());
+            auto xml_str = DeviceInfo::makeQueryResourceResponse(items,code,from_index,to_index,real_num);
+            client->async([tid,weak_ptr,xml_str] {
+                if (auto cli = weak_ptr.lock()) {
+                    cli->sendResourceResponse(tid,xml_str);
+                }
+            });
+        };
+
+        _on_query_resource_info_cb(code, from_index, to_index, cb);
+    }else {
+        //没有回调时 发送空内容
+        WarnL << "未设置回调，查询资源设备 返回空";
+        auto xml_str = DeviceInfo::makeQueryResourceResponse({},code,from_index,to_index,0);
+        sendResourceResponse(event,"");
+    }
+}
+
+void SipBClient::sendResourceResponse(int tid, const std::string &xml_str) {
+    auto *event = _wait_answer_event[tid];
+    _wait_answer_event.erase(tid);
+    if (event) {
+        sendResourceResponse(event,xml_str);
+        eXosip_event_free(event);
+    }
+}
+
+void SipBClient::sendResourceResponse(const eXosip_event_t *event, const std::string &xml_str) const {
+    auto l = lockContext();
+    osip_message_t *answer;
+    auto ret = eXosip_message_build_answer(_ex_ctx, event->tid, 200, &answer);
+    DebugL << "响应资源信息-构建消息 " << ret;
+    if (ret == 0) {
+        osip_message_set_body(answer,xml_str.c_str(),xml_str.size());
+        ret = eXosip_message_send_answer(_ex_ctx, event->tid, 200, answer);
+        DebugL << "响应资源信息-发送消息 " << ret;
+        if (ret == 0) {
+            InfoL << "响应资源信息-成功";
         }
     }
 
-    // 2. Build and send response MESSAGE with catalog data
-    if (_on_catalog_query_cb) {
-        auto weak_ptr = weakPtr();
-        _on_catalog_query_cb([weak_ptr,sn](vector<DeviceInfo> &vec, bool detail) {
-            auto client = weak_ptr.lock();
-            if (!client) {
-                return;
-            }
-
-            pugi::xml_document doc;
-            auto root = doc.append_child(STR_XML_ROOT_RESPONSE);
-            root.append_child(STR_CMD_TYPE).append_child(pugi::node_pcdata).set_value(STR_CATA_LOG);
-            root.append_child("SN").append_child(pugi::node_pcdata).set_value(sn);
-            root.append_child("DeviceID").append_child(pugi::node_pcdata).set_value(client->_device_id);
-            root.append_child("SumNum").append_child(pugi::node_pcdata).set_value(to_string(vec.size()));
-            auto list_node = root.append_child("DeviceList");
-            list_node.append_attribute("Num").set_value(to_string(vec.size()));
-            for (auto& info : vec) {
-                info.appendItemToDocument(list_node);
-            }
-            auto xml_str = XmlTools::xmlDocumentToString(doc);
-            InfoL << "[CataLog]上报设备信息";
-            // DebugL << xml_str;
-            client->sendMessage(xml_str);
-        });
+    if (ret) {
+        ErrorL << "响应资源信息-失败 "<< ret;
     }
 }
 
-void SipBClient::handleDeviceInfoQuery(eXosip_event_t *event, osip_message_t *request, const std::string &sn) {
-    InfoL << "[DeviceInfo] 设备信息查询, SN: " << sn;
+void SipBClient::processEvent(eXosip_event_t *event) {
+    if (!event) {
+        return;
+    }
 
+    //让exosip 处理一些常规操作，401回复，首次订阅回复200 等
     {
         auto l = lockContext();
-        osip_message_t *answer = nullptr;
-        if (eXosip_message_build_answer(_ex_ctx, event->tid, 200, &answer) == 0 && answer) {
-            eXosip_message_send_answer(_ex_ctx, event->tid, 200, answer);
-            InfoL << "已响应 DeviceInfo 查询 200 OK";
-        }
+        eXosip_default_action(_ex_ctx, event);
     }
-    if (_on_query_device_info_func) {
-        auto weak_ptr = weakPtr();
-        _on_query_device_info_func([sn,weak_ptr](DeviceInfo &info) {
-            auto client = weak_ptr.lock();
-            if (!client) {
-                return;
+
+    if (_print_message) {
+        SipTools::printEvent(event, _user_id.c_str());
+    }
+    auto request = event->request;
+    auto response = event->response;
+
+    switch (event->type) {
+        case EXOSIP_REGISTRATION_SUCCESS: {
+            InfoL << "注册成功";
+            _status = ClientStatus::REGISTERED;
+            _last_register_time = getCurrentMillisecond() / 1000;
+            if (auto cb = _on_register_func) {
+                cb(true, "");
             }
-            auto xml_str = info.createDeviceInfoResponse(client->_device_id, sn);
-            InfoL << "[DeviceInfo]上报设备信息";
-            // DebugL << xml_str;
-            client->sendMessage(xml_str);
-        });
+            if (!_resource_reported) {
+                sendResourceReport();
+                _resource_reported = true;
+            }
+            break;
+        }
+
+        case EXOSIP_REGISTRATION_FAILURE: {
+            std::string reason = "Registration failed";
+            if (response) {
+                if (response->status_code == 401) {
+                    //内部会自动处理401 响应
+                    DebugL << "收到401";
+                    break;
+                }
+                reason += " (" + std::to_string(response->status_code);
+                if (response->reason_phrase) {
+                    reason += " " + std::string(response->reason_phrase);
+                }
+                reason += ")";
+            }
+            ErrorL << "<<< " << reason << " >>>";
+            _status = ClientStatus::UNREGISTER;
+            _resource_reported = false;
+            if (auto cb = _on_register_func) {
+                cb(false, reason);
+            }
+            break;
+        }
+
+        case EXOSIP_MESSAGE_NEW: {
+            onEventMessageNew(event);
+            break;
+        }
+        case EXOSIP_IN_SUBSCRIPTION_NEW: {
+            handleSubscribe(event);
+            break;
+        }
+        case EXOSIP_MESSAGE_ANSWERED: {
+            onMessageAnswered(event);
+            break;
+        }
+
+        default:
+            break;
+    }
+    //有些事件需要延时释放
+    if (_wait_answer_event.find(event->tid) == _wait_answer_event.end()) {
+        eXosip_event_free(event);
     }
 }
+
+void SipBClient::async(const std::function<void()>& func) {
+    if (_ex_ctx && _running){
+        auto l = lockThis();
+        _run_list.emplace_back(func);
+        eXosip_wakeup_event(_ex_ctx);
+    }
+}
+
 
 onceToken SipBClient::lockContext() const {
     return {
@@ -509,7 +561,7 @@ onceToken SipBClient::lockContext() const {
     };
 }
 
-std::unique_lock<std::mutex> SipBClient::lockThis(){
+std::unique_lock<std::mutex> SipBClient::lockThis() {
     return std::unique_lock(_mtx);
 }
 
@@ -517,7 +569,13 @@ std::weak_ptr<SipBClient> SipBClient::weakPtr() {
     return shared_from_this();
 }
 
-void SipBClient::sendMessage(const std::string &body_str,const std::string& method) {
+void SipBClient::checkNotRegister() const {
+    if (isRegistered()) {
+        throw std::runtime_error("不允许执行，已注册！");
+    }
+}
+
+void SipBClient::sendMessage(const std::string &body_str, const std::string &method) {
     auto l = lockContext();
     if (!isRegistered())
         return;
@@ -543,10 +601,6 @@ void SipBClient::onMessageAnswered(eXosip_event_t *event) {
     }
     auto request_doc = SipTools::sipMessageGetBodyXmlDocument(request);
     auto root_node = request_doc.document_element();
-    const auto cmd_type = root_node.child_value(STR_CMD_TYPE);
-    if (osip_strcasecmp(cmd_type, STR_KEEP_ALIVE) == 0) {
-        onKeepAliveAnswer(response->status_code);
-    }
 }
 
 void SipBClient::eventLoop() {
@@ -554,87 +608,27 @@ void SipBClient::eventLoop() {
     auto ptr = shared_from_this();
     while (_running) {
         eXosip_event_t *event = eXosip_event_wait(_ex_ctx, 1, 0);
+        processEvent(event);
 
-        checkKeepAlive();
         if (isRegistered()) {
             checkRefreshRegister();
             checkSubscribe();
         }
 
-        if (event == nullptr) {
-            continue;
-        }
-
+        //异步执行逻辑
         {
-            auto l = lockContext();
-            eXosip_default_action(_ex_ctx, event);
+            std::list<std::function<void()>> list;
+            //加锁取，无锁状态执行
+            {
+                auto l = lockThis();
+                list = _run_list;
+            }
+            for (auto &function: list) {
+                if (function) {
+                    function();
+                }
+            }
         }
-
-        if (_print_message) {
-            SipTools::printEvent(event,_user_id.c_str());
-        }
-        auto request = event->request;
-        auto response = event->response;
-
-        switch (event->type) {
-            case EXOSIP_REGISTRATION_SUCCESS: {
-                InfoL << "注册成功";
-                _status = ClientStatus::REGISTERED;
-                _last_register_time = getCurrentMillisecond() / 1000;
-                auto cb = _on_register_func;
-                if (cb) {
-                    cb(true, "");
-                }
-                checkKeepAlive();
-                if (!_resource_reported) {
-                    sendResourceReport();
-                    _resource_reported = true;
-                }
-                break;
-            }
-
-            case EXOSIP_REGISTRATION_FAILURE: {
-                std::string reason = "Registration failed";
-                if (response) {
-                    if (response->status_code == 401) {
-                        //内部会自动处理401 响应
-                        DebugL << "收到401";
-                        break;
-                    }
-                    reason += " (" + std::to_string(response->status_code);
-                    if (response->reason_phrase) {
-                        reason += " " + std::string(response->reason_phrase);
-                    }
-                    reason += ")";
-                }
-                ErrorL << "<<< " << reason << " >>>";
-                _status = ClientStatus::UNREGISTER;
-                _resource_reported = false;
-                auto cb = _on_register_func;
-                if (cb) {
-                    cb(false, reason);
-                }
-                break;
-            }
-
-            case EXOSIP_MESSAGE_NEW: {
-                onEventMessageNew(event);
-                break;
-            }
-            case EXOSIP_IN_SUBSCRIPTION_NEW: {
-                handleSubscribe(event);
-                break;
-            }
-            case EXOSIP_MESSAGE_ANSWERED: {
-                onMessageAnswered(event);
-                break;
-            }
-
-            default:
-                break;
-        }
-
-        eXosip_event_free(event);
     }
 
     InfoL << "Event thread exited";

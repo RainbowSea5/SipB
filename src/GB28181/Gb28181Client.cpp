@@ -465,7 +465,7 @@ void Gb28181Client::handleCatalogQuery(eXosip_event_t *event, osip_message_t *re
             auto list_node = root.append_child("DeviceList");
             list_node.append_attribute("Num").set_value(to_string(vec.size()));
             for (auto& info:vec) {
-                info.appendItemToDocument(list_node);
+                info.appendItemToDocument(list_node,detail);
             }
             auto xml_str = XmlTools::xmlDocumentToString(doc);
             InfoL << "[CataLog]上报设备信息";

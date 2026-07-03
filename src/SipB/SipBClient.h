@@ -30,37 +30,28 @@ public:
     /** 是否已注册成功 */
     bool isRegistered() const { return _status == ClientStatus::REGISTERED; }
 
-    //更新位置信息
-    void setPositionInfo(MobilePositionInfo info);
-
     /** 订阅回调: event_type, expires */
     using SubscribeCallback = std::function<void(const std::string& event_type, int expires)>;
-    void setOnSubscribe(SubscribeCallback cb) {
-        _on_subscribe_func = std::move(cb);
-    }
+    void setOnSubscribe(SubscribeCallback cb);
 
-    void setOnInit(std::function<void()> on_init_func) {
-        _on_init_func = std::move(on_init_func);
-    }
+    void setOnInit(std::function<void()> on_init_func);
 
-    void setOnRegister(std::function<void(bool success, const std::string &reason)> on_register_func) {
-        _on_register_func = std::move(on_register_func);
-    }
+    void setOnRegister(std::function<void(bool success, const std::string &reason)> on_register_func);
 
-    using CatalogQueryCallback = std::function<void(std::function<void(std::vector<DeviceInfo>&,bool)>)>;
-    void setOnCatalogQuery(CatalogQueryCallback cb) {
-        _on_catalog_query_cb = std::move(cb);
-    }
+    using OnQueryAllResource = std::function<void(std::function<void(std::vector<DeviceInfo>&)>)>;
+    void setOnQueryAllResource(OnQueryAllResource cb);
 
-    using OnQueryDeviceInfoCallback = std::function<void(std::function<void(DeviceInfo& info)>)>;
-    void setOnQueryDeviceInfo(OnQueryDeviceInfoCallback on_device_info_func) {
-        _on_query_device_info_func = std::move(on_device_info_func);
-    }
+    using OnQueryResourceInfoCallback = std::function<void(const std::string& code,int from_index, int to_index,
+                                                           std::function<void(const std::vector<DeviceInfo>& items, int real_num)>
+    )>;
+
+    void setOnQueryResourceInfo(OnQueryResourceInfoCallback cb);
 
     void openDebuggerLog() { _print_message = true;}
 
     std::weak_ptr<SipBClient> weakPtr();
 private:
+    void checkNotRegister() const;
     void sendMessage(const std::string& body_str,const std::string& method = STR_METHOD_MESSAGE);
     void onMessageAnswered(eXosip_event_t * event);
 
@@ -70,23 +61,30 @@ private:
 
     bool sendUnRegisterMessage();
 
-    void checkKeepAlive();
     void checkRefreshRegister();
     void checkSubscribe();
-    void checkPositionSubscribe(SubscribeInfo& info);
-    void sendResourceReport();
 
     void onEventMessageNew(eXosip_event_t* event);
 
     void handleSubscribe(eXosip_event_t* event);
     void handleMessage(eXosip_event_t* event);
-    void handleCatalogQuery(eXosip_event_t* event, osip_message_t* request, const std::string& sn);
-    void handleDeviceInfoQuery(eXosip_event_t* event, osip_message_t* request, const std::string& sn);
 
-    void onKeepAliveAnswer(int status_code);
+    //[B.2] 主动上报 资源
+    void sendResourceReport();
+
+    //[B.3] 处理服务器下发的 资源信息获取
+    void handleResourceRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
+    //[B.3] 响应 资源信息获取
+    void sendResourceResponse(int tid,const std::string& xml_str);
+    //[B.3] 响应 资源信息获取
+    void sendResourceResponse(const eXosip_event_t* event,const std::string& xml_str) const;
+
+    void processEvent(eXosip_event_t* event);
+
+    void async(const std::function<void()>& func);
+
     toolkit::onceToken lockContext() const;
     std::unique_lock<std::mutex> lockThis();
-
 
     ClientStatus _status{ClientStatus::UN_INIT};
 
@@ -97,14 +95,12 @@ private:
     std::function<void(bool success,const std::string& reason)> _on_register_func;
     // 订阅回调
     SubscribeCallback _on_subscribe_func;
-    // 目录查询回调
-    CatalogQueryCallback _on_catalog_query_cb;
-    // 网络设备信息查询
-    OnQueryDeviceInfoCallback _on_query_device_info_func;
+
+    OnQueryAllResource _on_query_all_resource;
+    OnQueryResourceInfoCallback _on_query_resource_info_cb;
 #pragma endregion
 
     std::mutex _mtx;
-    MobilePositionInfo _position_info;
     std::list<SubscribeInfo> _subscribe_list;
 
     toolkit::EventPoller::Ptr _poller;
@@ -125,16 +121,17 @@ private:
     uint64_t _last_register_time{0};
 #pragma endregion
 
-    //心跳
-    int _keepalive_interval{10};
-    uint64_t _last_keep_alive_time{0},_last_keep_alive_response_time{0};
-
     // 发送消息序列号
     uint16_t _sn{1};
     std::string _sip_from,_sip_to,_sip_proxy;
 
     bool _print_message{false};
     bool _resource_reported{false};
+
+    //只在event thread插入删除o
+    std::map<int,eXosip_event_t*> _wait_answer_event;
+    // lockThis 访问
+    std::list<std::function<void()>> _run_list;
 };
 }
 #endif // SIP_B_H
