@@ -150,6 +150,13 @@ struct SubscribeInfo {
     uint64_t expiration_time,last_report_time{0};
 };
 
+
+enum class RtpPayload {
+    MP4V_ES = 98,
+    AVS_P2 = 99,
+    H264 = 100,
+    H265 = 108,
+};
 }
 
 
