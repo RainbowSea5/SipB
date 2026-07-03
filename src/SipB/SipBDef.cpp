@@ -90,6 +90,47 @@ std::string AlarmInfo::makeQueryHistoryAlarmResponse(const std::vector<AlarmInfo
     return XmlTools::xmlDocumentToString(doc);
 }
 
+RecordInfo::RecordInfo(std::string file_name, std::string file_url, std::string begin_time, std::string end_time,
+    int64_t size, int32_t decoder_tag, std::string type)
+    : file_name(std::move(file_name)),
+      file_url(std::move(file_url)),
+      begin_time(std::move(begin_time)),
+      end_time(std::move(end_time)),
+      size(size),
+      decoder_tag(decoder_tag),
+      type(std::move(type)) {
+}
+
+void RecordInfo::appendItemToDocument(pugi::xml_node &doc) const {
+    auto item = doc.append_child("Item");
+    item.append_attribute("FileName").set_value(file_name.c_str());
+    item.append_attribute("FileUrl").set_value(file_url.c_str());
+    item.append_attribute("BeginTime").set_value(begin_time.c_str());
+    item.append_attribute("EndTime").set_value(end_time.c_str());
+    item.append_attribute("Size").set_value(size);
+    item.append_attribute("DecoderTag").set_value(decoder_tag);
+    item.append_attribute("Type").set_value(type.c_str());
+}
+
+std::string RecordInfo::makeQueryHistoryVideoResponse(const std::vector<RecordInfo> &items, int from_index,
+    int to_index, uint32_t real_num) {
+    pugi::xml_document doc;
+    auto root = doc.append_child("SIP_XML");
+    root.append_attribute("EventType").set_value(STR_EVENT_TYPE_RESPONSE_HISTORY_VIDEO);
+
+    auto sub_list = root.append_child("SubList");
+    sub_list.append_attribute("RealNum").set_value(real_num);
+    sub_list.append_attribute("SubNum").set_value(items.size());
+    sub_list.append_attribute("FromIndex").set_value(from_index);
+    sub_list.append_attribute("ToIndex").set_value(to_index);
+
+    for (auto &info: items) {
+        info.appendItemToDocument(sub_list);
+    }
+
+    return XmlTools::xmlDocumentToString(doc);
+}
+
 SubscribeInfo::SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str, uint32_t interval)
     : cmd_type(std::move(cmd_type)),interval(interval),sn_str(std::move(sn_str)) {
 

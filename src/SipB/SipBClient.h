@@ -46,13 +46,20 @@ public:
     )>;
     using OnQueryHistoryAlarmCallback = std::function<void(const std::string& code,
         const std::string& user_code, const std::string& type,
-        const std::string& begin_time, const std::string& end_time,
+        const std::string& utc_begin_time, const std::string& utc_end_time,
         const std::string& level, int from_index, int to_index,
         std::function<void(const std::vector<AlarmInfo>& items, int real_num)>
+    )>;
+    using OnQueryHistoryVideoCallback = std::function<void(const std::string& code,
+        int32_t type, const std::string& user_code,
+        const std::string& utc_begin_time, const std::string& utc_end_time,
+        int from_index, int to_index,
+        std::function<void(const std::vector<RecordInfo>& items, int real_num)>
     )>;
 
     void setOnQueryResourceInfo(OnQueryResourceInfoCallback cb);
     void setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb);
+    void setOnQueryHistoryVideo(OnQueryHistoryVideoCallback cb);
 
     void openDebuggerLog() { _print_message = true;}
 
@@ -83,6 +90,8 @@ private:
     void handleResourceRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
     //[B.4] 处理服务器下发的 历史告警查询请求
     void handleHistoryAlarmRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
+    //[B.5] 处理服务器下发的 录像检索请求
+    void handleHistoryVideoRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
     // 通用的 MESSAGE 响应
     void sendMessageResponse(int tid, const std::string& body_str, const std::string& log_tag);
     void sendMessageResponse(const eXosip_event_t* event, const std::string& body_str, const std::string& log_tag) const;
@@ -108,6 +117,8 @@ private:
     OnQueryResourceInfoCallback _on_query_resource_info_cb;
     // 历史告警查询回调
     OnQueryHistoryAlarmCallback _on_query_history_alarm_cb;
+    // 录像检索回调
+    OnQueryHistoryVideoCallback _on_query_history_video_cb;
 #pragma endregion
 
     std::mutex _mtx;

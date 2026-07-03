@@ -157,6 +157,11 @@ void SipBClient::setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb) {
     _on_query_history_alarm_cb = std::move(cb);
 }
 
+void SipBClient::setOnQueryHistoryVideo(OnQueryHistoryVideoCallback cb) {
+    checkNotRegister();
+    _on_query_history_video_cb = std::move(cb);
+}
+
 
 void SipBClient::sendInitialRegister() {
     std::string from = "sip:" + _device_id + "@" + _server_domain;
@@ -404,6 +409,8 @@ void SipBClient::handleMessage(eXosip_event_t *event) {
         handleResourceRequest(event, xml_root);
     } else if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_HISTORY_ALARM) == 0) {
         handleHistoryAlarmRequest(event, xml_root);
+    } else if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_HISTORY_VIDEO) == 0) {
+        handleHistoryVideoRequest(event, xml_root);
     } else {
         WarnL << "未实现的 EventType: " << event_type;
     }
@@ -486,6 +493,49 @@ void SipBClient::handleHistoryAlarmRequest(eXosip_event_t *event, const xml_node
         WarnL << "未设置回调，查询历史告警 返回空";
         auto xml_str = AlarmInfo::makeQueryHistoryAlarmResponse({}, from_index, to_index, 0);
         sendMessageResponse(event, xml_str, "历史告警");
+    }
+}
+
+void SipBClient::handleHistoryVideoRequest(eXosip_event_t *event, const xml_node &xml_root) {
+    auto item_node = xml_root.child("Item");
+    std::string code = item_node.attribute("Code").value();
+    int32_t type = atoi(item_node.attribute("Type").value());
+    std::string user_code = item_node.attribute("UserCode").value();
+    std::string begin_time = item_node.attribute("BeginTime").value();
+    std::string end_time = item_node.attribute("EndTime").value();
+    int from_index = atoi(item_node.attribute("FromIndex").value());
+    int to_index = atoi(item_node.attribute("ToIndex").value());
+    auto tid = event->tid;
+
+    InfoL << "[HistoryVideoRequest] Code: " << code
+          << ", Type: " << type
+          << ", UserCode: " << user_code
+          << ", BeginTime: " << begin_time
+          << ", EndTime: " << end_time
+          << ", From: " << from_index << ", To: " << to_index;
+
+    if (_on_query_history_video_cb) {
+        _wait_answer_event[event->tid] = event;
+
+        auto weak_ptr = weakPtr();
+
+        auto cb = [weak_ptr, from_index, to_index, tid](const std::vector<RecordInfo> &items, int real_num) {
+            auto client = weak_ptr.lock();
+            if (!client) return;
+            PrintD("查询录像共%d条", items.size());
+            auto xml_str = RecordInfo::makeQueryHistoryVideoResponse(items, from_index, to_index, real_num);
+            client->async([tid, weak_ptr, xml_str] {
+                if (auto cli = weak_ptr.lock()) {
+                    cli->sendMessageResponse(tid, xml_str, "录像检索");
+                }
+            });
+        };
+
+        _on_query_history_video_cb(code, type, user_code, begin_time, end_time, from_index, to_index, cb);
+    } else {
+        WarnL << "未设置回调，查询录像 返回空";
+        auto xml_str = RecordInfo::makeQueryHistoryVideoResponse({}, from_index, to_index, 0);
+        sendMessageResponse(event, xml_str, "录像检索");
     }
 }
 

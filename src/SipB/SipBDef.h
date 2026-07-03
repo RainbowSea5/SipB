@@ -33,6 +33,8 @@ static const char* STR_EVENT_TYPE_REQUEST_RESOURCE{"Request_Resource"};
 static const char* STR_EVENT_TYPE_REQUEST_HISTORY_ALARM{"Request_History_Alarm"};
 
 static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_ALARM{"Response_History_Alarm"};
+static const char* STR_EVENT_TYPE_REQUEST_HISTORY_VIDEO{"Request_History_Video"};
+static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_VIDEO{"Response_History_Video"};
 
 enum class ClientStatus {
     UN_INIT = 0,
@@ -79,6 +81,45 @@ struct AlarmInfo {
     uint16_t status{0};
     //告警类型
     std::string type;
+};
+
+//录像类型按位定义 (Type 字段, INT32)
+enum class RecordType : uint32_t {
+    VIDEO_LOSS_ALARM   = 1 << 0,   // 视频丢失告警录像
+    MOTION_DETECTION   = 1 << 1,   // 移动侦测告警录像
+    VIDEO_OCCLUSION    = 1 << 2,   // 视频遮挡告警录像
+    DEVICE_HIGH_TEMP   = 1 << 8,   // 设备高温告警
+    DEVICE_LOW_TEMP    = 1 << 9,   // 设备低温告警
+    FAN_FAULT          = 1 << 10,  // 风扇故障告警
+    DISK_FAULT         = 1 << 11,  // 磁盘故障告警
+    STATUS_EVENT       = 1 << 16,  // 状态事件告警
+    SCHEDULED          = 1 << 20,  // 定时录像
+    USER_REQUEST       = 1 << 21,  // 用户请求录像
+};
+
+static constexpr uint32_t RECORD_TYPE_ALL = 0xFFFFFFFF; // 请求所有录像类型
+
+struct RecordInfo {
+    RecordInfo(std::string file_name, std::string file_url, std::string begin_time, std::string end_time,
+        int64_t size, int32_t decoder_tag, std::string type);
+    void appendItemToDocument(pugi::xml_node& doc) const;
+    static std::string makeQueryHistoryVideoResponse(const std::vector<RecordInfo>& vec,
+        int from_index, int to_index, uint32_t real_num);
+
+    //文件名
+    std::string file_name;
+    //文件URL
+    std::string file_url;
+    //实际开始时间
+    std::string begin_time;
+    //实际结束时间
+    std::string end_time;
+    //文件大小
+    int64_t size{0};
+    //解码插件标签
+    int32_t decoder_tag{0};
+    //类型值
+    int32_t type;
 };
 
 struct SubscribeInfo {
