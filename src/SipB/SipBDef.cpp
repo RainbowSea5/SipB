@@ -56,11 +56,11 @@ std::string DeviceInfo::makeQueryResourceResponse(const std::vector<DeviceInfo> 
     return XmlTools::xmlDocumentToString(doc);
 }
 
-AlarmInfo::AlarmInfo(std::string code, std::string utc_begin_time, uint16_t status, std::string type)
+AlarmInfo::AlarmInfo(std::string code, std::string utc_begin_time, uint16_t status, int32_t type)
     : code(std::move(code)),
       utc_begin_time(std::move(utc_begin_time)),
       status(status),
-      type(std::move(type)) {
+      type(type) {
 }
 
 void AlarmInfo::appendItemToDocument(pugi::xml_node &doc) const {
@@ -68,7 +68,7 @@ void AlarmInfo::appendItemToDocument(pugi::xml_node &doc) const {
     item.append_attribute("Code").set_value(code.c_str());
     item.append_attribute("BeginTime").set_value(utc_begin_time.c_str());
     item.append_attribute("Status").set_value(status);
-    item.append_attribute("Type").set_value(type.c_str());
+    item.append_attribute("Type").set_value(type);
 }
 
 std::string AlarmInfo::makeQueryHistoryAlarmResponse(const std::vector<AlarmInfo> &items, int from_index,
@@ -91,14 +91,14 @@ std::string AlarmInfo::makeQueryHistoryAlarmResponse(const std::vector<AlarmInfo
 }
 
 RecordInfo::RecordInfo(std::string file_name, std::string file_url, std::string begin_time, std::string end_time,
-    int64_t size, int32_t decoder_tag, std::string type)
+    int64_t size, int32_t decoder_tag, int32_t type)
     : file_name(std::move(file_name)),
       file_url(std::move(file_url)),
       begin_time(std::move(begin_time)),
       end_time(std::move(end_time)),
       size(size),
       decoder_tag(decoder_tag),
-      type(std::move(type)) {
+      type(type) {
 }
 
 void RecordInfo::appendItemToDocument(pugi::xml_node &doc) const {
@@ -109,7 +109,7 @@ void RecordInfo::appendItemToDocument(pugi::xml_node &doc) const {
     item.append_attribute("EndTime").set_value(end_time.c_str());
     item.append_attribute("Size").set_value(size);
     item.append_attribute("DecoderTag").set_value(decoder_tag);
-    item.append_attribute("Type").set_value(type.c_str());
+    item.append_attribute("Type").set_value(type);
 }
 
 std::string RecordInfo::makeQueryHistoryVideoResponse(const std::vector<RecordInfo> &items, int from_index,

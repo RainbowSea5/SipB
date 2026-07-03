@@ -67,8 +67,20 @@ struct DeviceInfo {
     double latitude = 0.0;
 };
 
+//告警类型按位定义 (B.4 Type 字段, INT32)
+enum class AlarmType : uint32_t {
+    VIDEO_LOSS     = 1 << 0,   // 视频丢失告警
+    MOTION_DETECT  = 1 << 1,   // 移动侦测告警
+    VIDEO_BLOCK    = 1 << 2,   // 视频遮挡告警
+    DEVICE_HIGH_TEMP = 1 << 8, // 设备高温告警
+    DEVICE_LOW_TEMP  = 1 << 9, // 设备低温告警
+    FAN_FAULT      = 1 << 10,  // 风扇故障告警
+    DISK_FAULT     = 1 << 11,  // 磁盘故障告警
+    STATUS_EVENT   = 1 << 16,  // 状态事件告警
+};
+
 struct AlarmInfo {
-    AlarmInfo(std::string code, std::string utc_begin_time, uint16_t status, std::string type);
+    AlarmInfo(std::string code, std::string utc_begin_time, uint16_t status, int32_t type);
     void appendItemToDocument(pugi::xml_node& doc) const;
     static std::string makeQueryHistoryAlarmResponse(const std::vector<AlarmInfo>& vec,
         int from_index, int to_index, uint32_t real_num);
@@ -80,9 +92,10 @@ struct AlarmInfo {
     //告警状态
     uint16_t status{0};
     //告警类型
-    std::string type;
+    int32_t type;
 };
 
+static constexpr uint32_t RECORD_TYPE_ALL = 0xFFFFFFFF; // 请求所有录像类型
 //录像类型按位定义 (Type 字段, INT32)
 enum class RecordType : uint32_t {
     VIDEO_LOSS_ALARM   = 1 << 0,   // 视频丢失告警录像
@@ -97,11 +110,9 @@ enum class RecordType : uint32_t {
     USER_REQUEST       = 1 << 21,  // 用户请求录像
 };
 
-static constexpr uint32_t RECORD_TYPE_ALL = 0xFFFFFFFF; // 请求所有录像类型
-
 struct RecordInfo {
     RecordInfo(std::string file_name, std::string file_url, std::string begin_time, std::string end_time,
-        int64_t size, int32_t decoder_tag, std::string type);
+        int64_t size, int32_t decoder_tag, int32_t type);
     void appendItemToDocument(pugi::xml_node& doc) const;
     static std::string makeQueryHistoryVideoResponse(const std::vector<RecordInfo>& vec,
         int from_index, int to_index, uint32_t real_num);
