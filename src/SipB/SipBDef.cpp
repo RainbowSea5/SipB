@@ -56,6 +56,40 @@ std::string DeviceInfo::makeQueryResourceResponse(const std::vector<DeviceInfo> 
     return XmlTools::xmlDocumentToString(doc);
 }
 
+AlarmInfo::AlarmInfo(std::string code, std::string utc_begin_time, uint16_t status, std::string type)
+    : code(std::move(code)),
+      utc_begin_time(std::move(utc_begin_time)),
+      status(status),
+      type(std::move(type)) {
+}
+
+void AlarmInfo::appendItemToDocument(pugi::xml_node &doc) const {
+    auto item = doc.append_child("Item");
+    item.append_attribute("Code").set_value(code.c_str());
+    item.append_attribute("BeginTime").set_value(utc_begin_time.c_str());
+    item.append_attribute("Status").set_value(status);
+    item.append_attribute("Type").set_value(type.c_str());
+}
+
+std::string AlarmInfo::makeQueryHistoryAlarmResponse(const std::vector<AlarmInfo> &items, int from_index,
+    int to_index, uint32_t real_num) {
+    pugi::xml_document doc;
+    auto root = doc.append_child("SIP_XML");
+    root.append_attribute("EventType").set_value(STR_EVENT_TYPE_RESPONSE_HISTORY_ALARM);
+
+    auto sub_list = root.append_child("SubList");
+    sub_list.append_attribute("RealNum").set_value(real_num);
+    sub_list.append_attribute("SubNum").set_value(items.size());
+    sub_list.append_attribute("FromIndex").set_value(from_index);
+    sub_list.append_attribute("ToIndex").set_value(to_index);
+
+    for (auto &info: items) {
+        info.appendItemToDocument(sub_list);
+    }
+
+    return XmlTools::xmlDocumentToString(doc);
+}
+
 SubscribeInfo::SubscribeInfo(std::string cmd_type, uint32_t expires, std::string sn_str, uint32_t interval)
     : cmd_type(std::move(cmd_type)),interval(interval),sn_str(std::move(sn_str)) {
 

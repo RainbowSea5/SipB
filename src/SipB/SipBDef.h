@@ -30,7 +30,9 @@ static const char* STR_XML_ROOT_NOTIFY{"Notify"};
 static const char* STR_MOBILE_POSITION{"MobilePosition"};
 
 static const char* STR_EVENT_TYPE_REQUEST_RESOURCE{"Request_Resource"};
+static const char* STR_EVENT_TYPE_REQUEST_HISTORY_ALARM{"Request_History_Alarm"};
 
+static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_ALARM{"Response_History_Alarm"};
 
 enum class ClientStatus {
     UN_INIT = 0,
@@ -61,6 +63,22 @@ struct DeviceInfo {
     double longitude = 0.0;
     //纬度
     double latitude = 0.0;
+};
+
+struct AlarmInfo {
+    AlarmInfo(std::string code, std::string utc_begin_time, uint16_t status, std::string type);
+    void appendItemToDocument(pugi::xml_node& doc) const;
+    static std::string makeQueryHistoryAlarmResponse(const std::vector<AlarmInfo>& vec,
+        int from_index, int to_index, uint32_t real_num);
+
+    //告警源地址编码
+    std::string code;
+    //实际开始时间
+    std::string utc_begin_time;
+    //告警状态
+    uint16_t status{0};
+    //告警类型
+    std::string type;
 };
 
 struct SubscribeInfo {

@@ -44,8 +44,15 @@ public:
     using OnQueryResourceInfoCallback = std::function<void(const std::string& code,int from_index, int to_index,
                                                            std::function<void(const std::vector<DeviceInfo>& items, int real_num)>
     )>;
+    using OnQueryHistoryAlarmCallback = std::function<void(const std::string& code,
+        const std::string& user_code, const std::string& type,
+        const std::string& begin_time, const std::string& end_time,
+        const std::string& level, int from_index, int to_index,
+        std::function<void(const std::vector<AlarmInfo>& items, int real_num)>
+    )>;
 
     void setOnQueryResourceInfo(OnQueryResourceInfoCallback cb);
+    void setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb);
 
     void openDebuggerLog() { _print_message = true;}
 
@@ -74,10 +81,11 @@ private:
 
     //[B.3] 处理服务器下发的 资源信息获取
     void handleResourceRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
-    //[B.3] 响应 资源信息获取
-    void sendResourceResponse(int tid,const std::string& xml_str);
-    //[B.3] 响应 资源信息获取
-    void sendResourceResponse(const eXosip_event_t* event,const std::string& xml_str) const;
+    //[B.4] 处理服务器下发的 历史告警查询请求
+    void handleHistoryAlarmRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
+    // 通用的 MESSAGE 响应
+    void sendMessageResponse(int tid, const std::string& body_str, const std::string& log_tag);
+    void sendMessageResponse(const eXosip_event_t* event, const std::string& body_str, const std::string& log_tag) const;
 
     void processEvent(eXosip_event_t* event);
 
@@ -98,6 +106,8 @@ private:
 
     OnQueryAllResource _on_query_all_resource;
     OnQueryResourceInfoCallback _on_query_resource_info_cb;
+    // 历史告警查询回调
+    OnQueryHistoryAlarmCallback _on_query_history_alarm_cb;
 #pragma endregion
 
     std::mutex _mtx;

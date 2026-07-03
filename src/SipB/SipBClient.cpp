@@ -11,6 +11,7 @@
 #include "XmlTools/XmlTools.h"
 using namespace toolkit;
 using namespace std;
+using namespace pugi;
 
 namespace sipB {
 SipBClient::SipBClient(EventPoller::Ptr poller)
@@ -149,6 +150,11 @@ void SipBClient::setOnQueryAllResource(OnQueryAllResource cb) {
 void SipBClient::setOnQueryResourceInfo(OnQueryResourceInfoCallback cb) {
     checkNotRegister();
     _on_query_resource_info_cb = std::move(cb);
+}
+
+void SipBClient::setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb) {
+    checkNotRegister();
+    _on_query_history_alarm_cb = std::move(cb);
 }
 
 
@@ -396,12 +402,14 @@ void SipBClient::handleMessage(eXosip_event_t *event) {
     auto event_type = xml_root.attribute("EventType").value();
     if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_RESOURCE) == 0) {
         handleResourceRequest(event, xml_root);
+    } else if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_HISTORY_ALARM) == 0) {
+        handleHistoryAlarmRequest(event, xml_root);
     } else {
         WarnL << "未实现的 EventType: " << event_type;
     }
 }
 
-void SipBClient::handleResourceRequest(eXosip_event_t *event, const pugi::xml_node &xml_root) {
+void SipBClient::handleResourceRequest(eXosip_event_t *event, const xml_node &xml_root) {
     auto item_node = xml_root.child("Item");
     std::string code = item_node.attribute("Code").value();
     int from_index = atoi(item_node.attribute("FromIndex").value());
@@ -422,7 +430,7 @@ void SipBClient::handleResourceRequest(eXosip_event_t *event, const pugi::xml_no
             auto xml_str = DeviceInfo::makeQueryResourceResponse(items,code,from_index,to_index,real_num);
             client->async([tid,weak_ptr,xml_str] {
                 if (auto cli = weak_ptr.lock()) {
-                    cli->sendResourceResponse(tid,xml_str);
+                    cli->sendMessageResponse(tid, xml_str, "资源信息");
                 }
             });
         };
@@ -432,35 +440,79 @@ void SipBClient::handleResourceRequest(eXosip_event_t *event, const pugi::xml_no
         //没有回调时 发送空内容
         WarnL << "未设置回调，查询资源设备 返回空";
         auto xml_str = DeviceInfo::makeQueryResourceResponse({},code,from_index,to_index,0);
-        sendResourceResponse(event,"");
+        sendMessageResponse(event, "", "资源信息");
     }
 }
 
-void SipBClient::sendResourceResponse(int tid, const std::string &xml_str) {
+void SipBClient::handleHistoryAlarmRequest(eXosip_event_t *event, const xml_node &xml_root) {
+    auto item_node = xml_root.child("Item");
+    std::string code = item_node.attribute("Code").value();
+    std::string user_code = item_node.attribute("UserCode").value();
+    std::string type = item_node.attribute("Type").value();
+    std::string begin_time = item_node.attribute("BeginTime").value();
+    std::string end_time = item_node.attribute("EndTime").value();
+    std::string level = item_node.attribute("Level").value();
+    int from_index = atoi(item_node.attribute("FromIndex").value());
+    int to_index = atoi(item_node.attribute("ToIndex").value());
+    auto tid = event->tid;
+
+    InfoL << "[HistoryAlarmRequest] Code: " << code
+          << ", UserCode: " << user_code
+          << ", Type: " << type
+          << ", BeginTime: " << begin_time
+          << ", EndTime: " << end_time
+          << ", Level: " << level
+          << ", From: " << from_index << ", To: " << to_index;
+
+    if (_on_query_history_alarm_cb) {
+        _wait_answer_event[event->tid] = event;
+
+        auto weak_ptr = weakPtr();
+
+        auto cb = [weak_ptr, from_index, to_index, tid](const std::vector<AlarmInfo> &items, int real_num) {
+            auto client = weak_ptr.lock();
+            if (!client) return;
+            PrintD("查询历史告警共%d条", items.size());
+            auto xml_str = AlarmInfo::makeQueryHistoryAlarmResponse(items, from_index, to_index, real_num);
+            client->async([tid, weak_ptr, xml_str] {
+                if (auto cli = weak_ptr.lock()) {
+                    cli->sendMessageResponse(tid, xml_str, "历史告警");
+                }
+            });
+        };
+
+        _on_query_history_alarm_cb(code, user_code, type, begin_time, end_time, level, from_index, to_index, cb);
+    } else {
+        WarnL << "未设置回调，查询历史告警 返回空";
+        auto xml_str = AlarmInfo::makeQueryHistoryAlarmResponse({}, from_index, to_index, 0);
+        sendMessageResponse(event, xml_str, "历史告警");
+    }
+}
+
+void SipBClient::sendMessageResponse(int tid, const std::string &body_str, const std::string &log_tag) {
     auto *event = _wait_answer_event[tid];
     _wait_answer_event.erase(tid);
     if (event) {
-        sendResourceResponse(event,xml_str);
+        sendMessageResponse(event, body_str, log_tag);
         eXosip_event_free(event);
     }
 }
 
-void SipBClient::sendResourceResponse(const eXosip_event_t *event, const std::string &xml_str) const {
+void SipBClient::sendMessageResponse(const eXosip_event_t *event, const std::string &body_str, const std::string &log_tag) const {
     auto l = lockContext();
     osip_message_t *answer;
     auto ret = eXosip_message_build_answer(_ex_ctx, event->tid, 200, &answer);
-    DebugL << "响应资源信息-构建消息 " << ret;
+    DebugL << "响应" << log_tag << "-构建消息 " << ret;
     if (ret == 0) {
-        osip_message_set_body(answer,xml_str.c_str(),xml_str.size());
+        osip_message_set_body(answer, body_str.c_str(), body_str.size());
         ret = eXosip_message_send_answer(_ex_ctx, event->tid, 200, answer);
-        DebugL << "响应资源信息-发送消息 " << ret;
+        DebugL << "响应" << log_tag << "-发送消息 " << ret;
         if (ret == 0) {
-            InfoL << "响应资源信息-成功";
+            InfoL << "响应" << log_tag << "-成功";
         }
     }
-
     if (ret) {
-        ErrorL << "响应资源信息-失败 "<< ret;
+        ErrorL << "响应" << log_tag << "-失败 " << ret;
     }
 }
 
