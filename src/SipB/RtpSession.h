@@ -49,13 +49,12 @@ class RtpSession : public std::enable_shared_from_this<RtpSession> {
 public:
     using Ptr = std::shared_ptr<RtpSession>;
 
-    static Ptr create(const std::string &offer_sdp,const std::string &local_ip,uint16_t local_port,
-                      const std::shared_ptr<toolkit::EventPoller> &poller);
+    static Ptr create(const std::string &offer_sdp);
 
     ~RtpSession();
 
     // 生成 answer SDP
-    std::string makeAnswerSdp() const;
+    std::string makeAnswerSdp(const std::string& local_ip, uint16_t local_port);
 
     // 发送 RTP (时间戳单位: H264/H265=90000Hz, PCMA=8000Hz)
     void inputH264(const uint8_t *data, size_t len, uint32_t timestamp);
@@ -74,14 +73,15 @@ public:
     void setOnRequestAudioFrame(std::function<void()> cb);
 
     const MediaTrackInfo &trackInfo() const { return _selected_track; }
+    const std::string &sessionName() const { return _session_name; }
 
     // 获取所有解析出的轨道
     const std::vector<MediaTrackInfo> &offerTracks() const { return _offer_tracks; }
 
 private:
-    explicit RtpSession(std::shared_ptr<toolkit::EventPoller> poller);
+    RtpSession();
 
-    bool init(const std::string &offer_sdp, uint16_t local_port, const std::string &local_ip);
+    bool init(const std::string &offer_sdp);
 
     bool parseOfferSdp(const std::string &offer_sdp);
     bool resolveTrack();
@@ -100,7 +100,9 @@ private:
 
     std::string _local_ip;
     uint16_t _local_port{0};
-    std::shared_ptr<toolkit::EventPoller> _poller;
+    // answer SDP 缓存（仅生成一次）
+    std::string _answer_sdp;
+    bool _answer_generated{false};
 
     // 传输
     void setupUdpTransport();

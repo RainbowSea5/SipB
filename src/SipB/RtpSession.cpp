@@ -9,8 +9,7 @@ using namespace std;
 
 namespace sipB {
 
-RtpSession::RtpSession(shared_ptr<EventPoller> poller)
-    : _poller(std::move(poller)) {}
+RtpSession::RtpSession() = default;
 
 RtpSession::~RtpSession() {
     if (_udp_client) {
@@ -18,21 +17,15 @@ RtpSession::~RtpSession() {
     }
 }
 
-RtpSession::Ptr RtpSession::create(const string& offer_sdp,
-                                    const string& local_ip,
-                                    uint16_t local_port,
-                                    const shared_ptr<EventPoller>& poller) {
-    auto session = Ptr(new RtpSession(poller));
-    if (!session->init(offer_sdp, local_port, local_ip)) {
+RtpSession::Ptr RtpSession::create(const string& offer_sdp) {
+    auto session = Ptr(new RtpSession());
+    if (!session->init(offer_sdp)) {
         return nullptr;
     }
     return session;
 }
 
-bool RtpSession::init(const string& offer_sdp, uint16_t local_port, const string& local_ip) {
-    _local_ip = local_ip;
-    _local_port = local_port;
-
+bool RtpSession::init(const string& offer_sdp) {
     if (!parseOfferSdp(offer_sdp)) {
         ErrorL << "解析 offer SDP 失败";
         return false;
@@ -50,9 +43,6 @@ bool RtpSession::init(const string& offer_sdp, uint16_t local_port, const string
         return false;
     }
 
-    // 建立传输通道
-    setupUdpTransport();
-
     return true;
 }
 
@@ -60,7 +50,7 @@ bool RtpSession::init(const string& offer_sdp, uint16_t local_port, const string
 // UDP 传输
 //==============================================================================
 void RtpSession::setupUdpTransport() {
-    _udp_client = make_shared<UdpClient>(_poller);
+    _udp_client = make_shared<UdpClient>();
     _udp_client->setNetAdapter(_local_ip);
     _udp_client->startConnect(_remote_ip, _selected_track.remote_port, _local_port);
     if (!_udp_client->alive()) {
@@ -316,7 +306,14 @@ bool RtpSession::parseOfferSdp(const string& offer_sdp) {
 //==============================================================================
 // SDP 生成
 //==============================================================================
-string RtpSession::makeAnswerSdp() const {
+string RtpSession::makeAnswerSdp(const string& local_ip, uint16_t local_port) {
+    if (_answer_generated) {
+        return _answer_sdp;
+    }
+    _local_ip = local_ip;
+    _local_port = local_port;
+    setupUdpTransport();
+
     const char* dir;
     switch (_direction) {
         case TransportDirection::SENDONLY: {
@@ -371,7 +368,9 @@ string RtpSession::makeAnswerSdp() const {
             << "a=" << dir << "\r\n"
             << "a=rtpmap:" << (int)_selected_track.payload_type
             << " " << codec_name << "/" << _selected_track.clock_rate << "\r\n";
-    return oss.str();
+    _answer_sdp = oss.str();
+    _answer_generated = true;
+    return _answer_sdp;
 }
 
 } // namespace sipB
