@@ -1,12 +1,8 @@
 #include "RtpSession.h"
-#include "RtpContext.h"
+#include "Rtp/RtpContext.h"
 
 #include <cstdlib>
 #include <sstream>
-
-#include "Network/UdpClient.h"
-#include "Poller/EventPoller.h"
-#include "Util/logger.h"
 
 using namespace toolkit;
 using namespace std;
@@ -48,7 +44,7 @@ bool RtpSession::init(const string& offer_sdp, uint16_t local_port, const string
     }
 
     // 创建打包器（纯打包，不负责发送）
-    _packetizer = RtpContext::create(_selected_track, _ssrc);
+    _packetizer = ::rtp::RtpContext::create(_selected_track.payload_type, _ssrc);
     if (!_packetizer) {
         ErrorL << "创建打包器失败";
         return false;

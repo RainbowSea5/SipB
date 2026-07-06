@@ -7,12 +7,10 @@
 #include <memory>
 #include <vector>
 #include <utility>
-
-namespace toolkit {
-    class EventPoller;
-    class UdpClient;
-    class Buffer;
-}
+#include "Network/UdpClient.h"
+#include "Poller/EventPoller.h"
+#include "Rtp/RtpContext.h"
+#include "Util/logger.h"
 
 namespace sipB {
 // 传输模式
@@ -45,8 +43,6 @@ struct MediaTrackInfo {
     // from m= line
     std::string media_type;
 };
-
-class RtpContext; // 内部实现，前向声明
 
 // RTP 会话 - 解析 SDP、收发 RTP、支持双向
 class RtpSession : public std::enable_shared_from_this<RtpSession> {
@@ -92,7 +88,7 @@ private:
 
     std::vector<MediaTrackInfo> _offer_tracks;
     MediaTrackInfo _selected_track;
-    std::shared_ptr<RtpContext> _packetizer;  // 打包器
+    std::shared_ptr<rtp::RtpContext> _packetizer;
     std::shared_ptr<toolkit::UdpClient> _udp_client;
 
     // session 级属性

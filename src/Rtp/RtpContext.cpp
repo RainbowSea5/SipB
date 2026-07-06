@@ -6,27 +6,21 @@
 
 using namespace std;
 
-namespace sipB {
+namespace rtp {
 
-// 缓存缓冲区初始大小
-static constexpr size_t VIDEO_BUF_SIZE = 2 + 12 + 2 + 1400; // TCP头 + RTP头 + FU头 + MTU
-static constexpr size_t AUDIO_BUF_SIZE = 2 + 12 + 320;      // TCP头 + RTP头 + 40ms PCMA
+static constexpr size_t VIDEO_BUF_SIZE = 2 + 12 + 2 + 1400;
+static constexpr size_t AUDIO_BUF_SIZE = 2 + 12 + 320;
 
-RtpContext::RtpContext(const MediaTrackInfo& track, uint32_t ssrc)
-    : _track(track), _ssrc(ssrc) {
+RtpContext::RtpContext(uint8_t payload_type, uint32_t ssrc)
+    : _payload_type(payload_type), _ssrc(ssrc) {
     _video_buf.resize(VIDEO_BUF_SIZE);
     _audio_buf.resize(AUDIO_BUF_SIZE);
 }
 
-RtpContext::Ptr RtpContext::create(const MediaTrackInfo& track, uint32_t ssrc) {
-    return Ptr(new RtpContext(track, ssrc));
+RtpContext::Ptr RtpContext::create(uint8_t payload_type, uint32_t ssrc) {
+    return Ptr(new RtpContext(payload_type, ssrc));
 }
 
-//==============================================================================
-// 内部工具
-//==============================================================================
-
-// 写 RTP 固定头到 buf (V=2, P=0, X=0, CC=0)
 void RtpContext::writeRtpHeader(uint8_t* buf, uint8_t pt, bool marker, uint32_t timestamp) {
     buf[0] = 0x80;
     buf[1] = (marker ? 0x80 : 0) | (pt & 0x7F);
@@ -43,15 +37,11 @@ void RtpContext::writeRtpHeader(uint8_t* buf, uint8_t pt, bool marker, uint32_t 
     ++_seq;
 }
 
-// 写入 2 字节 TCP 长度前缀 (RFC 4571)
 static void writeTcpPrefix(uint8_t* buf, uint16_t rtp_len) {
     buf[0] = (rtp_len >> 8) & 0xFF;
     buf[1] = rtp_len & 0xFF;
 }
 
-//==============================================================================
-// H264 打包
-//==============================================================================
 void RtpContext::packetizeH264Nalu(const uint8_t* nalu, size_t len,
                                     uint32_t timestamp, RtpPacketCallback cb) {
     if (len < 1) {
@@ -62,18 +52,16 @@ void RtpContext::packetizeH264Nalu(const uint8_t* nalu, size_t len,
     const size_t MAX_PAYLOAD = 1400;
 
     if (len <= MAX_PAYLOAD) {
-        // 单 NAL 单元: 2(TCP前缀) + 12(RTP头) + len(NAL)
         size_t total = 2 + 12 + len;
         _video_buf.resize(total);
         uint8_t* buf = _video_buf.data();
         writeTcpPrefix(buf, static_cast<uint16_t>(12 + len));
-        writeRtpHeader(buf + 2, _track.payload_type, true, timestamp);
+        writeRtpHeader(buf + 2, _payload_type, true, timestamp);
         memcpy(buf + 14, nalu, len);
         cb(buf, total);
         return;
     }
 
-    // FU-A 分片: 2(TCP前缀) + 12(RTP头) + 2(FU头) + frag
     const uint8_t* pay = nalu + 1;
     size_t pay_len = len - 1;
     size_t off = 0;
@@ -87,7 +75,7 @@ void RtpContext::packetizeH264Nalu(const uint8_t* nalu, size_t len,
         _video_buf.resize(total);
         uint8_t* buf = _video_buf.data();
         writeTcpPrefix(buf, static_cast<uint16_t>(12 + 2 + frag));
-        writeRtpHeader(buf + 2, _track.payload_type, last, timestamp);
+        writeRtpHeader(buf + 2, _payload_type, last, timestamp);
         buf[14] = 0x7C | (nal_ref << 5);
         buf[15] = (first ? 0x80 : 0) | (last ? 0x40 : 0) | nal_type;
         memcpy(buf + 16, pay + off, frag);
@@ -98,36 +86,24 @@ void RtpContext::packetizeH264Nalu(const uint8_t* nalu, size_t len,
 
 void RtpContext::inputH264(const uint8_t* data, size_t len,
                             uint32_t timestamp, RtpPacketCallback cb) {
-    // 跳过 AnnexB 起始码
     const uint8_t* nalu = data;
     size_t nlen = len;
     while (nlen >= 4 && nalu[0] == 0 && nalu[1] == 0) {
         if (nalu[2] == 1) {
-            nalu += 3;
-            nlen -= 3;
-            break;
+            nalu += 3; nlen -= 3; break;
         }
         if (nlen >= 4 && nalu[2] == 0 && nalu[3] == 1) {
-            nalu += 4;
-            nlen -= 4;
-            break;
+            nalu += 4; nlen -= 4; break;
         }
         break;
     }
-    if (nlen < 1) {
-        return;
-    }
+    if (nlen < 1) { return; }
     packetizeH264Nalu(nalu, nlen, timestamp, cb);
 }
 
-//==============================================================================
-// H265 打包
-//==============================================================================
 void RtpContext::packetizeH265Nalu(const uint8_t* nalu, size_t len,
                                     uint32_t timestamp, RtpPacketCallback cb) {
-    if (len < 2) {
-        return;
-    }
+    if (len < 2) { return; }
     uint8_t nal_type = (nalu[0] >> 1) & 0x3F;
     const size_t MAX_PAYLOAD = 1400;
 
@@ -136,7 +112,7 @@ void RtpContext::packetizeH265Nalu(const uint8_t* nalu, size_t len,
         _video_buf.resize(total);
         uint8_t* buf = _video_buf.data();
         writeTcpPrefix(buf, static_cast<uint16_t>(12 + len));
-        writeRtpHeader(buf + 2, _track.payload_type, true, timestamp);
+        writeRtpHeader(buf + 2, _payload_type, true, timestamp);
         memcpy(buf + 14, nalu, len);
         cb(buf, total);
         return;
@@ -155,7 +131,7 @@ void RtpContext::packetizeH265Nalu(const uint8_t* nalu, size_t len,
         _video_buf.resize(total);
         uint8_t* buf = _video_buf.data();
         writeTcpPrefix(buf, static_cast<uint16_t>(12 + 3 + frag));
-        writeRtpHeader(buf + 2, _track.payload_type, last, timestamp);
+        writeRtpHeader(buf + 2, _payload_type, last, timestamp);
         buf[14] = (nalu[0] & 0x80) | (49 << 1) | ((nalu[1] >> 7) & 1);
         buf[15] = (nalu[1] & 0x7F) | 0x80;
         buf[16] = (first ? 0x80 : 0) | (last ? 0x40 : 0) | (nal_type & 0x3F);
@@ -170,39 +146,24 @@ void RtpContext::inputH265(const uint8_t* data, size_t len,
     const uint8_t* nalu = data;
     size_t nlen = len;
     while (nlen >= 4 && nalu[0] == 0 && nalu[1] == 0) {
-        if (nalu[2] == 1) {
-            nalu += 3;
-            nlen -= 3;
-            break;
-        }
-        if (nlen >= 4 && nalu[2] == 0 && nalu[3] == 1) {
-            nalu += 4;
-            nlen -= 4;
-            break;
-        }
+        if (nalu[2] == 1) { nalu += 3; nlen -= 3; break; }
+        if (nlen >= 4 && nalu[2] == 0 && nalu[3] == 1) { nalu += 4; nlen -= 4; break; }
         break;
     }
-    if (nlen < 2) {
-        return;
-    }
+    if (nlen < 2) { return; }
     packetizeH265Nalu(nalu, nlen, timestamp, cb);
 }
 
-//==============================================================================
-// PCMA 打包
-//==============================================================================
 void RtpContext::inputPCMA(const uint8_t* data, size_t len,
                             uint32_t timestamp, RtpPacketCallback cb) {
-    if (len == 0) {
-        return;
-    }
+    if (len == 0) { return; }
     size_t total = 2 + 12 + len;
     _audio_buf.resize(total);
     uint8_t* buf = _audio_buf.data();
     writeTcpPrefix(buf, static_cast<uint16_t>(12 + len));
-    writeRtpHeader(buf + 2, _track.payload_type, true, timestamp);
+    writeRtpHeader(buf + 2, _payload_type, true, timestamp);
     memcpy(buf + 14, data, len);
     cb(buf, total);
 }
 
-} // namespace sipB
+} // namespace rtp
