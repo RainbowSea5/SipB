@@ -6,7 +6,10 @@
 #include <thread>
 #include <atomic>
 #include <memory>
+#include <map>
 #include <eXosip2/eXosip.h>
+
+#include "RtpSession.h"
 #include "Poller/EventPoller.h"
 #include "SipBDef.h"
 
@@ -96,6 +99,14 @@ private:
     void sendMessageResponse(int tid, const std::string& body_str, const std::string& log_tag);
     void sendMessageResponse(const eXosip_event_t* event, const std::string& body_str, const std::string& log_tag) const;
 
+    void onEventInvite(eXosip_event_t * event);
+    void sendCallResponse(eXosip_event_t* event, int status_code, const std::string& reason = "");
+    void onEventInviteAck(eXosip_event_t * event);
+    //发送bye
+    void sendCallTerminate(const eXosip_event_t *event) const;
+    void sendCallTerminate(int cid,int did) const;
+    void closeCall(const toolkit::SockException& ex,int cid, int did);
+
     void processEvent(eXosip_event_t* event);
 
     void async(const std::function<void()>& func);
@@ -145,6 +156,11 @@ private:
     // 发送消息序列号
     uint16_t _sn{1};
     std::string _sip_from,_sip_to,_sip_proxy;
+
+    // 活跃的 INVITE 会话  cid => session
+    std::map<int, RtpSession::Ptr> _active_sessions;
+    // RTP 端口分配
+    uint16_t _rtp_port{10000};
 
     bool _print_message{false};
     bool _resource_reported{false};

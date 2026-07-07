@@ -633,6 +633,22 @@ void SipBClient::processEvent(eXosip_event_t *event) {
             onMessageAnswered(event);
             break;
         }
+        case EXOSIP_CALL_INVITE: {
+            onEventInvite(event);
+            break;
+        }
+        case EXOSIP_CALL_ACK: {
+            onEventInviteAck(event);
+            break;
+        }
+        case EXOSIP_CALL_CANCELLED: {
+            closeCall({Err_success,"对端取消"},event->cid,event->did);
+            break;
+        }
+        case EXOSIP_CALL_CLOSED: {
+            closeCall({Err_success,"对端发送BYE"},event->cid,event->did);
+            break;
+        }
 
         default:
             break;
@@ -703,6 +719,148 @@ void SipBClient::onMessageAnswered(eXosip_event_t *event) {
     }
     auto request_doc = SipTools::sipMessageGetBodyXmlDocument(request);
     auto root_node = request_doc.document_element();
+}
+
+void SipBClient::sendCallResponse(eXosip_event_t* event, int status_code, const std::string& reason) {
+    auto l = lockContext();
+    osip_message_t* answer = nullptr;
+    int ret = eXosip_call_build_answer(_ex_ctx, event->tid, status_code, &answer);
+    if (ret == 0 && answer) {
+        if (!reason.empty()) {
+            osip_message_set_header(answer, "Warning", reason.c_str());
+        }
+        eXosip_call_send_answer(_ex_ctx, event->tid, status_code, answer);
+    }
+}
+
+void SipBClient::onEventInviteAck(eXosip_event_t *event) {
+    int cid = event->cid;
+    int did = event->did;
+    auto it = _active_sessions.find(cid);
+    if (it == _active_sessions.end() || !it->second) {
+        return sendCallTerminate(event);
+    }
+    auto session = it->second;
+    auto weak_ptr = weakPtr();
+
+    auto on_error = [weak_ptr,cid,did](const SockException& ex) {
+        if (ex.getErrCode() == Err_success) {
+            return;
+        }
+        if (auto client = weak_ptr.lock()) {
+            client->async([weak_ptr,cid,did,ex]() {
+                if (auto cli = weak_ptr.lock()) {
+                    cli->closeCall(ex,cid,did);
+                }
+            });
+        }
+    };
+
+    session->onStart(on_error);
+}
+
+void SipBClient::sendCallTerminate(const eXosip_event_t *event) const {
+    sendCallTerminate(event->cid,event->did);
+}
+
+void SipBClient::sendCallTerminate(int cid, int did) const {
+    auto l = lockContext();
+    if (int ret = eXosip_call_terminate(_ex_ctx, cid, did)) {
+        ErrorL << "发送BYE失败 " << ret;
+    }else {
+        InfoL << "发送BYE " << cid;
+    }
+}
+
+void SipBClient::closeCall(const SockException &ex, int cid, int did) {
+    if (ex.getErrCode() != Err_success) {
+        sendCallTerminate(cid,did);
+    }
+    auto it = _active_sessions.find(cid);
+    if (it == _active_sessions.end() || !it->second) {
+        PrintW("通话[%d][%d]结束: %s",cid,did,ex.what());
+    }else {
+        PrintW("通话[%s][%d][%d]结束: %s",it->second->sessionName().c_str(), cid,did,ex.what());
+        //这里触发析构 来关闭session
+        _active_sessions.erase(cid);
+    }
+}
+
+void SipBClient::onEventInvite(eXosip_event_t *event) {
+    if (!event || !event->request) {
+        return;
+    }
+    auto request = event->request;
+
+    osip_body_t* body = nullptr;
+    osip_message_get_body(request, 0, &body);
+    if (!body || !body->body) {
+        sendCallResponse(event, 488, "No SDP");
+        return;
+    }
+
+    {
+        auto l = lockContext();
+        eXosip_call_send_answer(_ex_ctx,event->tid,100,nullptr);
+    }
+
+    std::string sdp(body->body);
+
+    // 创建 RTP 会话（内部解析 SDP）
+    auto session = RtpSession::create(sdp);
+    if (!session) {
+        ErrorL << "创建 RtpSession 失败";
+        sendCallResponse(event, 500, "Failed to create session");
+        return;
+    }
+
+    // 从会话获取 session name (s= 行)
+    std::string session_name = session->sessionName();
+    if (session_name.empty()) {
+        sendCallResponse(event, 400, "Bad Request - no s= line");
+        return;
+    }
+
+    // 相同类型会话只能存在一个
+    for (auto&[cid, s] : _active_sessions) {
+        if (s && s->sessionName() == session_name) {
+            WarnL << "会话类型 " << session_name << " 已存在，返回 503";
+            sendCallResponse(event, 503, "Session type already exists");
+            return;
+        }
+    }
+
+    int port = -1;
+    {
+        auto l = lockContext();
+        port = eXosip_find_free_port(_ex_ctx,_rtp_port,session->getIPProto());
+    }
+    if (port<=0) {
+        ErrorL << "查找可用端口失败 " << port;
+        sendCallResponse(event, 500, "Failed to find free port");
+        return;
+    }
+    //更新开始查找的端口
+    _rtp_port = port;
+
+    std::string answer_sdp = session->makeAnswerSdp(_local_ip, port);
+    _active_sessions[event->cid] = session;
+
+    InfoL << "创建会话成功, 类型=" << session_name << ", RTP 端口=" << port;
+
+    {
+        auto l = lockContext();
+        osip_message_t* answer = nullptr;
+        int ret = eXosip_call_build_answer(_ex_ctx, event->tid, 200, &answer);
+        if (ret == 0 && answer) {
+            osip_message_set_body(answer, answer_sdp.c_str(), answer_sdp.size());
+            osip_message_set_content_type(answer, "application/sdp");
+            eXosip_call_send_answer(_ex_ctx, event->tid, 200, answer);
+            DebugL << "INVITE 200 OK 已发送";
+        } else {
+            ErrorL << "构建 INVITE 200 OK 失败 ret=" << ret;
+        }
+    }
 }
 
 void SipBClient::eventLoop() {

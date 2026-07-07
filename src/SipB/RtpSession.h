@@ -78,6 +78,11 @@ public:
     // 获取所有解析出的轨道
     const std::vector<MediaTrackInfo> &offerTracks() const { return _offer_tracks; }
 
+    int getIPProto() const;
+
+    void onStart(const std::function<void(const toolkit::SockException& ex)>& on_error);
+
+    bool isUdp() const;
 private:
     RtpSession();
 
@@ -86,10 +91,14 @@ private:
     bool parseOfferSdp(const std::string &offer_sdp);
     bool resolveTrack();
 
+    void sendRtpPacket(const uint8_t* data, size_t len);
+    void onRecvRtp(const uint8_t* data, size_t len);
+
     std::vector<MediaTrackInfo> _offer_tracks;
     MediaTrackInfo _selected_track;
     std::shared_ptr<rtp::RtpContext> _packetizer;
-    std::shared_ptr<toolkit::UdpClient> _udp_client;
+    // std::shared_ptr<toolkit::UdpClient> _udp_client;
+    toolkit::Socket::Ptr _client;
 
     // session 级属性
     std::string _session_name;
@@ -103,11 +112,6 @@ private:
     // answer SDP 缓存（仅生成一次）
     std::string _answer_sdp;
     bool _answer_generated{false};
-
-    // 传输
-    void setupUdpTransport();
-    void sendRtpPacket(const uint8_t* data, size_t len);
-    void onRecvRtp(const uint8_t* data, size_t len);
 
     // 接收回调
     std::function<void(const uint8_t* data, size_t len)> _on_pcm_data;

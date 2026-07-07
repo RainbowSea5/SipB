@@ -8,12 +8,68 @@ using namespace toolkit;
 using namespace std;
 
 namespace sipB {
+int RtpSession::getIPProto() const {
+    return isUdp()?IPPROTO_UDP:IPPROTO_TCP;
+}
+
+void RtpSession::onStart(const std::function<void(const SockException& ex)>& on_error) {
+    if (!_answer_generated) {
+        throw std::runtime_error("还没有生成answer sdp，不应该到这里");
+    }
+    if (_client) {
+        throw std::runtime_error("已经创建了client");
+    }
+
+    auto weak_self = weak_from_this();
+
+    _client = Socket::createSocket();
+    _client->setOnErr(on_error);
+    // 需要接收时注册回调
+    if (_direction == TransportDirection::RECVONLY ||_direction == TransportDirection::SENDRECV) {
+        _client->setOnRead([weak_self](const Buffer::Ptr& buf,struct sockaddr*, int) {
+            auto self = weak_self.lock();
+            if (!self) {
+                return;
+            }
+            self->onRecvRtp((const uint8_t*)buf->data(),buf->size());
+        });
+    }
+
+    if (isUdp()) {
+        bool ret = _client->bindUdpSock(_local_port, _local_ip);
+        if (!ret) {
+            WarnL << "UDP output bind local error";
+        }
+        auto peer_addr = SockUtil::make_sockaddr(_remote_ip.c_str(), _selected_track.remote_port);
+
+        //只能软绑定
+        ret = _client->bindPeerAddr((sockaddr *)&peer_addr, 0, true);
+        if (!ret) {
+            WarnL << "UDP output bind peer error";
+        }
+        if (!_client->alive()) {
+            ErrorL << "UDP 连接失败 remote=" << _remote_ip << ":" << _selected_track.remote_port;
+            on_error({Err_other});
+            return;
+        }
+        on_error({Err_success});
+    }else {
+        _client->connect(_remote_ip,trackInfo().remote_port,on_error,5,_local_ip,_local_port);
+    }
+
+    InfoL << (isUdp()?"[UDP] ":"[TCP] ") <<"传输就绪, local=" << _local_ip << ":" << _local_port
+          << " remote=" << _remote_ip << ":" << _selected_track.remote_port;
+}
+
+bool RtpSession::isUdp() const {
+    return _mode == TransportMode::UDP;
+}
 
 RtpSession::RtpSession() = default;
 
 RtpSession::~RtpSession() {
-    if (_udp_client) {
-        _udp_client->shutdown();
+    if (_client && _client->alive()) {
+        _client->closeSock();
     }
 }
 
@@ -46,54 +102,18 @@ bool RtpSession::init(const string& offer_sdp) {
     return true;
 }
 
-//==============================================================================
-// UDP 传输
-//==============================================================================
-void RtpSession::setupUdpTransport() {
-    _udp_client = make_shared<UdpClient>();
-    _udp_client->setNetAdapter(_local_ip);
-    _udp_client->startConnect(_remote_ip, _selected_track.remote_port, _local_port);
-    if (!_udp_client->alive()) {
-        ErrorL << "UDP 连接失败 remote=" << _remote_ip << ":" << _selected_track.remote_port;
-        return;
-    }
-
-    // 需要接收时注册回调
-    if (_direction == TransportDirection::RECVONLY ||_direction == TransportDirection::SENDRECV) {
-        auto weak_self = weak_from_this();
-        _udp_client->setOnRecvFrom([weak_self](const Buffer::Ptr& buf,
-                                                struct sockaddr*, int) {
-            auto self = weak_self.lock();
-            if (!self) {
-                return;
-            }
-            const uint8_t* d = (const uint8_t*)buf->data();
-            size_t n = buf->size();
-            if (n < 12) {
-                return;
-            }
-            if (self->_selected_track.codec == MediaCodec::PCMA && self->_on_pcm_data) {
-                self->_on_pcm_data(d + 12, n - 12);
-            }
-        });
-    }
-
-    InfoL << "UDP 传输就绪, local=" << _local_ip << ":" << _local_port
-          << " remote=" << _remote_ip << ":" << _selected_track.remote_port;
-}
-
 void RtpSession::sendRtpPacket(const uint8_t* data, size_t len) {
-    if (!_udp_client) {
+    if (!_client) {
         return;
     }
     if (_mode == TransportMode::UDP) {
         // UDP: 跳过前 2 字节 TCP 长度前缀
         if (len > 2) {
-            _udp_client->send(reinterpret_cast<const char*>(data + 2), len - 2);
+            _client->send(reinterpret_cast<const char*>(data + 2), len - 2);
         }
     } else {
         // TCP: 整包发送（含 2 字节 TCP 长度前缀）
-        _udp_client->send(reinterpret_cast<const char*>(data), len);
+        _client->send(reinterpret_cast<const char*>(data), len);
     }
 }
 
@@ -312,7 +332,6 @@ string RtpSession::makeAnswerSdp(const string& local_ip, uint16_t local_port) {
     }
     _local_ip = local_ip;
     _local_port = local_port;
-    setupUdpTransport();
 
     const char* dir;
     switch (_direction) {
