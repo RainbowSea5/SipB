@@ -94,7 +94,10 @@ private:
     bool resolveTrack();
 
     void sendRtpPacket(const uint8_t* data, size_t len);
-    void onRecvRtp(const uint8_t* data, size_t len);
+
+    void onRecv(char* data, size_t len);
+    void onRecvRtp(char* data, size_t len);
+    void onRecvRtcp(char* data, size_t len);
 
     std::vector<MediaTrackInfo> _offer_tracks;
     MediaTrackInfo _selected_track;

@@ -24,16 +24,11 @@ void RtpSession::onStart(const std::function<void(const SockException& ex)>& on_
 
     _client = Socket::createSocket();
     _client->setOnErr(on_error);
-    // 需要接收时注册回调
-    if (_direction == TransportDirection::RECVONLY ||_direction == TransportDirection::SENDRECV) {
-        _client->setOnRead([weak_self](const Buffer::Ptr& buf,struct sockaddr*, int) {
-            auto self = weak_self.lock();
-            if (!self) {
-                return;
-            }
-            self->onRecvRtp((const uint8_t*)buf->data(),buf->size());
-        });
-    }
+    _client->setOnRead([weak_self](const Buffer::Ptr& buf, sockaddr*, int) {
+        if (auto self = weak_self.lock()) {
+            self->onRecv(buf->data(),buf->size());
+        }
+    });
 
     if (isUdp()) {
         bool ret = _client->bindUdpSock(_local_port, _local_ip);
@@ -117,13 +112,34 @@ void RtpSession::sendRtpPacket(const uint8_t* data, size_t len) {
     }
 }
 
-void RtpSession::onRecvRtp(const uint8_t* data, size_t len) {
+void RtpSession::onRecv(char* data, size_t len) {
+    if (len < 4 || !rtp::RtpContext::isRtp(reinterpret_cast<const uint8_t*>(data), len)) {
+        return;
+    }
+    if (rtp::RtcpContext::isRtcp(reinterpret_cast<const uint8_t*>(data), len)) {
+        onRecvRtcp(data, len);
+    } else {
+        onRecvRtp(data, len);
+    }
+}
+
+void RtpSession::onRecvRtp(char* data, size_t len) {
     if (len < 12) {
         return;
     }
-    if (_selected_track.codec == MediaCodec::PCMA && _on_pcm_data) {
-        _on_pcm_data(data + 12, len - 12);
+    _packetizer->onRecvRtp(reinterpret_cast<const uint8_t*>(data), len,
+        [this](const uint8_t* payload, size_t payload_len, uint32_t) {
+            if (_selected_track.codec == MediaCodec::PCMA && _on_pcm_data) {
+                _on_pcm_data(payload, payload_len);
+            }
+        });
+}
+
+void RtpSession::onRecvRtcp(char* data, size_t len) {
+    if (len < 8) {
+        return;
     }
+    _packetizer->onRtcp(reinterpret_cast<const uint8_t*>(data), len);
 }
 
 //==============================================================================

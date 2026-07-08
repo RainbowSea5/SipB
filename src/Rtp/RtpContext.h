@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <vector>
+#include "RtcpContext.h"
 
 namespace rtp {
 
@@ -19,7 +21,20 @@ public:
     void inputH265(const uint8_t* data, size_t len, uint32_t timestamp, RtpPacketCallback cb);
     void inputPCMA(const uint8_t* data, size_t len, uint32_t timestamp, RtpPacketCallback cb);
 
-    uint8_t payloadType() const { return _payload_type; }
+    uint8_t payloadType() const {
+        return _payload_type;
+    }
+    // 判断数据是否为 RTP 包 (V=2)
+    static bool isRtp(const uint8_t* data, size_t len);
+    // 获取当前 RTCP SR (Sender Report)
+    std::vector<uint8_t> getRtcpSr(uint32_t ssrc);
+    // 处理收到的 RTCP RR
+    void onRtcpRr(const uint8_t* data, size_t len);
+    // 处理收到的复合 RTCP 包，内部只处理 RR
+    void onRtcp(const uint8_t* data, size_t len);
+    // 接收 RTP 包：解析头部 + 序列号排序缓冲 + 有序回调 payload
+    using OnRecvRtpPayload = std::function<void(const uint8_t* payload, size_t len, uint32_t timestamp)>;
+    void onRecvRtp(const uint8_t* data, size_t len, OnRecvRtpPayload cb);
 
 private:
     RtpContext(uint8_t payload_type, uint32_t ssrc);
@@ -35,6 +50,16 @@ private:
 
     std::vector<uint8_t> _video_buf;
     std::vector<uint8_t> _audio_buf;
+    RtcpContext _rtcp;
+    // RTP 接收排序缓冲
+    struct RtpRecvPacket {
+        std::vector<uint8_t> payload;
+        uint32_t timestamp{0};
+    };
+    std::map<uint16_t, RtpRecvPacket> _recv_buffer;
+    uint16_t _expected_seq{0};
+    bool _recv_initialized{false};
+    static constexpr size_t MAX_RECV_BUFFER = 50;
 };
 
 } // namespace rtp
