@@ -2,6 +2,7 @@
 #include "Rtp/RtpContext.h"
 
 #include <cstdlib>
+#include <chrono>
 #include <sstream>
 
 using namespace toolkit;
@@ -49,7 +50,15 @@ void RtpSession::onStart(const std::function<void(const SockException& ex)>& on_
         }
         on_error({Err_success});
     }else {
-        _client->connect(_remote_ip,trackInfo().remote_port,on_error,5,_local_ip,_local_port);
+        _client->connect(_remote_ip,trackInfo().remote_port,
+            [this, on_error](const toolkit::SockException& ex) {
+                if (!ex) {
+                    // TCP 连接成功，发送初始 RTCP SR 验证身份
+                    sendRtcpSr();
+                    _last_sr_time_ms = getCurrentMillisecond();
+                }
+                on_error(ex);
+            },5,_local_ip,_local_port);
     }
 
     InfoL << (isUdp()?"[UDP] ":"[TCP] ") <<"传输就绪, local=" << _local_ip << ":" << _local_port
@@ -142,10 +151,44 @@ void RtpSession::onRecvRtcp(char* data, size_t len) {
     _packetizer->onRtcp(reinterpret_cast<const uint8_t*>(data), len);
 }
 
+void RtpSession::sendRtcpSr() {
+    if (!_client || !_packetizer) {
+        return;
+    }
+    auto sr = _packetizer->getRtcpSr(_ssrc);
+    if (sr.empty()) {
+        return;
+    }
+    if (_mode == TransportMode::UDP) {
+        _client->send(reinterpret_cast<const char*>(sr.data()), sr.size());
+    } else {
+        // TCP: 前加 2 字节长度前缀
+        uint16_t sr_len = static_cast<uint16_t>(sr.size());
+        uint8_t hdr[2] = {
+            static_cast<uint8_t>((sr_len >> 8) & 0xFF),
+            static_cast<uint8_t>(sr_len & 0xFF)
+        };
+        _client->send(reinterpret_cast<const char*>(hdr), 2);
+        _client->send(reinterpret_cast<const char*>(sr.data()), sr.size());
+    }
+}
+
+void RtpSession::checkSendSr() {
+    if (_mode != TransportMode::TCP || !_client || !_packetizer) {
+        return;
+    }
+    auto now = getCurrentMillisecond();
+    if (now - _last_sr_time_ms >= 5000) {
+        sendRtcpSr();
+        _last_sr_time_ms = now;
+    }
+}
+
 //==============================================================================
 // 发送 API — 打包后自动发送
 //==============================================================================
 void RtpSession::inputH264(const uint8_t* data, size_t len, uint32_t timestamp) {
+    checkSendSr();
     if (_packetizer) {
         _packetizer->inputH264(data, len, timestamp, [this](const uint8_t* pkt, size_t n) {
             sendRtpPacket(pkt, n);
@@ -154,6 +197,7 @@ void RtpSession::inputH264(const uint8_t* data, size_t len, uint32_t timestamp) 
 }
 
 void RtpSession::inputH265(const uint8_t* data, size_t len, uint32_t timestamp) {
+    checkSendSr();
     if (_packetizer) {
         _packetizer->inputH265(data, len, timestamp, [this](const uint8_t* pkt, size_t n) {
             sendRtpPacket(pkt, n);
@@ -162,6 +206,7 @@ void RtpSession::inputH265(const uint8_t* data, size_t len, uint32_t timestamp) 
 }
 
 void RtpSession::inputPCMA(const uint8_t* data, size_t len, uint32_t timestamp) {
+    checkSendSr();
     if (_packetizer) {
         _packetizer->inputPCMA(data, len, timestamp, [this](const uint8_t* pkt, size_t n) {
             sendRtpPacket(pkt, n);

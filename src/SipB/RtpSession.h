@@ -94,6 +94,10 @@ private:
     bool resolveTrack();
 
     void sendRtpPacket(const uint8_t* data, size_t len);
+    // TCP: 发送 RTCP SR（首次用于身份验证，后续每 5s 发送）
+    void sendRtcpSr();
+    // 检查是否需要发送周期 RTCP SR
+    void checkSendSr();
 
     void onRecv(char* data, size_t len);
     void onRecvRtp(char* data, size_t len);
@@ -123,6 +127,8 @@ private:
     std::function<void()> _on_request_key_frame;
     std::function<void()> _on_request_audio_frame;
     int _cid;
+    // TCP RTCP SR 定时
+    uint64_t _last_sr_time_ms{0};
 };
 } // namespace sipB
 
