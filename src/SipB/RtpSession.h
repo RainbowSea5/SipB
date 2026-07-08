@@ -83,6 +83,8 @@ public:
     void onStart(const std::function<void(const toolkit::SockException& ex)>& on_error);
 
     bool isUdp() const;
+    void setCid(int cid){_cid = cid;}
+    int getCid() const {return _cid;}
 private:
     RtpSession();
 
@@ -117,6 +119,7 @@ private:
     std::function<void(const uint8_t* data, size_t len)> _on_pcm_data;
     std::function<void()> _on_request_key_frame;
     std::function<void()> _on_request_audio_frame;
+    int _cid;
 };
 } // namespace sipB
 

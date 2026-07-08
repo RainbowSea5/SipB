@@ -64,9 +64,30 @@ public:
     void setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb);
     void setOnQueryHistoryVideo(OnQueryHistoryVideoCallback cb);
 
-    void openDebuggerLog() { _print_message = true;}
 
-    std::weak_ptr<SipBClient> weakPtr();
+    // 视频编码回调: data, len, timestamp
+    using OnVideoData = std::function<bool(const uint8_t* data, size_t len,uint64_t pts_ms)>;
+    // 开始实时视频调阅，附带视频编码类型
+    using StartLiveVideoCallback = std::function<void(int call_id, MediaCodec codec, OnVideoData on_video_data)>;
+    void setOnStartLiveVideo(StartLiveVideoCallback cb);
+
+    // 音频编码回调: data, len, pts_ms
+    using OnAudioData = std::function<bool(const uint8_t* data, size_t len,uint64_t pts_ms)>;
+    // 开始获取实时音频，固定 PCM A/8000/1
+    using StartLiveAudioCallback = std::function<void(int call_id, OnAudioData on_audio_data)>;
+    void setOnStartLiveAudio(StartLiveAudioCallback cb);
+
+    // PCMA 播放器回调: 调用后返回一个可输入 PCMA 数据的函数。
+    // 输入空指针代表停止播放
+    using PcmPlayerCallback = std::function<std::function<void(const uint8_t* data, size_t len)>(int call_id)>;
+    void setOnAddPcmPlayer(PcmPlayerCallback cb);
+
+    // 停止会话 可以停止音频和视频的
+    // 需要支持未开始的cid进行停止
+    using StopCallCallback = std::function<void(int call_id)>;
+    void setOnStopCall(StopCallCallback cb);
+
+    void openDebuggerLog() { _print_message = true;}
 private:
     void checkNotRegister() const;
     void sendMessage(const std::string& body_str,const std::string& method = STR_METHOD_MESSAGE);
@@ -102,6 +123,8 @@ private:
     void onEventInvite(eXosip_event_t * event);
     void sendCallResponse(eXosip_event_t* event, int status_code, const std::string& reason = "");
     void onEventInviteAck(eXosip_event_t * event);
+    void onStartStream(RtpSession::Ptr& session);
+    void onStopStream(RtpSession::Ptr& session,int cid) const;
     //发送bye
     void sendCallTerminate(const eXosip_event_t *event) const;
     void sendCallTerminate(int cid,int did) const;
@@ -161,6 +184,14 @@ private:
     std::map<int, RtpSession::Ptr> _active_sessions;
     // RTP 端口分配
     uint16_t _rtp_port{10000};
+
+    // 实时视频调阅回调
+    StartLiveVideoCallback _on_start_real_play;
+    // 实时音频回调
+    StartLiveAudioCallback _on_start_real_talk;
+    // PCMA 播放器回调
+    PcmPlayerCallback _on_add_pcm_player;
+    StopCallCallback _on_stop_call;
 
     bool _print_message{false};
     bool _resource_reported{false};

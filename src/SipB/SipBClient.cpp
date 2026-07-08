@@ -162,6 +162,26 @@ void SipBClient::setOnQueryHistoryVideo(OnQueryHistoryVideoCallback cb) {
     _on_query_history_video_cb = std::move(cb);
 }
 
+void SipBClient::setOnStartLiveVideo(StartLiveVideoCallback cb) {
+    checkNotRegister();
+    _on_start_real_play = std::move(cb);
+}
+
+void SipBClient::setOnStopCall(StopCallCallback cb) {
+    checkNotRegister();
+    _on_stop_call = std::move(cb);
+}
+
+void SipBClient::setOnStartLiveAudio(StartLiveAudioCallback cb) {
+    checkNotRegister();
+    _on_start_real_talk = std::move(cb);
+}
+
+void SipBClient::setOnAddPcmPlayer(PcmPlayerCallback cb) {
+    checkNotRegister();
+    _on_add_pcm_player = std::move(cb);
+}
+
 
 void SipBClient::sendInitialRegister() {
     std::string from = "sip:" + _device_id + "@" + _server_domain;
@@ -273,7 +293,7 @@ void SipBClient::sendResourceReport() {
         return;
     }
 
-    auto weak_ptr = weakPtr();
+    auto weak_ptr = weak_from_this();
     _on_query_all_resource([weak_ptr](const vector<DeviceInfo> &vec) {
         auto client = weak_ptr.lock();
         if (!client || !client->isRegistered()) {
@@ -428,7 +448,7 @@ void SipBClient::handleResourceRequest(eXosip_event_t *event, const xml_node &xm
     if (_on_query_resource_info_cb) {
         _wait_answer_event[event->tid] = event;
 
-        auto weak_ptr = weakPtr();
+        auto weak_ptr = weak_from_this();
 
         auto cb = [weak_ptr, code, from_index, to_index,tid](const vector<DeviceInfo> &items, int real_num) {
             auto client = weak_ptr.lock();
@@ -474,7 +494,7 @@ void SipBClient::handleHistoryAlarmRequest(eXosip_event_t *event, const xml_node
     if (_on_query_history_alarm_cb) {
         _wait_answer_event[event->tid] = event;
 
-        auto weak_ptr = weakPtr();
+        auto weak_ptr = weak_from_this();
 
         auto cb = [weak_ptr, from_index, to_index, tid](const std::vector<AlarmInfo> &items, int real_num) {
             auto client = weak_ptr.lock();
@@ -517,7 +537,7 @@ void SipBClient::handleHistoryVideoRequest(eXosip_event_t *event, const xml_node
     if (_on_query_history_video_cb) {
         _wait_answer_event[event->tid] = event;
 
-        auto weak_ptr = weakPtr();
+        auto weak_ptr = weak_from_this();
 
         auto cb = [weak_ptr, from_index, to_index, tid](const std::vector<RecordInfo> &items, int real_num) {
             auto client = weak_ptr.lock();
@@ -683,10 +703,6 @@ std::unique_lock<std::mutex> SipBClient::lockThis() {
     return std::unique_lock(_mtx);
 }
 
-std::weak_ptr<SipBClient> SipBClient::weakPtr() {
-    return shared_from_this();
-}
-
 void SipBClient::checkNotRegister() const {
     if (isRegistered()) {
         throw std::runtime_error("不允许执行，已注册！");
@@ -741,7 +757,7 @@ void SipBClient::onEventInviteAck(eXosip_event_t *event) {
         return sendCallTerminate(event);
     }
     auto session = it->second;
-    auto weak_ptr = weakPtr();
+    auto weak_ptr = weak_from_this();
 
     auto on_error = [weak_ptr,cid,did](const SockException& ex) {
         if (ex.getErrCode() == Err_success) {
@@ -757,6 +773,73 @@ void SipBClient::onEventInviteAck(eXosip_event_t *event) {
     };
 
     session->onStart(on_error);
+    onStartStream(session);
+}
+
+void SipBClient::onStartStream(RtpSession::Ptr &session) {
+    auto weak_session = session->weak_from_this();
+    // 根据会话类型通知上层开始生产数据
+    std::string session_type = session->sessionName();
+    MediaCodec codec = session->trackInfo().codec;
+    auto cid = session->getCid();
+    auto weak_client = weak_from_this();
+
+    if (session_type == "Play") {
+        if (_on_start_real_play) {
+            auto on_video_data = [weak_session, codec](const uint8_t* data, size_t len, uint64_t pts_ms) {
+                if (auto ss = weak_session.lock()) {
+                    if (codec == MediaCodec::H264) {
+                        ss->inputH264(data, len, pts_ms);
+                        return true;
+                    }else if (codec == MediaCodec::H265) {
+                        ss->inputH265(data, len, pts_ms);
+                        return true;
+                    }else {
+                        WarnL << "没有合适的编码" << (uint8_t)codec;
+                    }
+                }
+                return false;
+            };
+            _on_start_real_play(cid, codec, on_video_data);
+        }else {
+            PrintE("[%s] [%d]无法开始获取实时视频，无回调",session_type.c_str(),cid);
+        }
+    }else if (session_type == "Talk") {
+        if (_on_start_real_talk) {
+            auto on_audio_data = [weak_session, cid](const uint8_t* data, size_t len, uint64_t pts_ms) {
+                if (auto ss = weak_session.lock()) {
+                    ss->inputPCMA(data, len, pts_ms);
+                    return true;
+                }
+                return false;
+            };
+            _on_start_real_talk(cid, on_audio_data);
+        }
+        // session->setOnPcmData([weak_client](const uint8_t* data, size_t len) {
+        //
+        // });
+        if (_on_add_pcm_player) {
+            auto player = _on_add_pcm_player(cid);
+            if (player) {
+                session->setOnPcmData(player);
+            }
+        }
+    }else if (session_type == "Broadcast") {
+        if (_on_add_pcm_player) {
+            auto player = _on_add_pcm_player(cid);
+            if (player) {
+                session->setOnPcmData(player);
+            }
+        }
+    }else if (session_type == "Playback") {
+
+    }
+}
+
+void SipBClient::onStopStream(RtpSession::Ptr &session, int cid) const {
+    if (_on_stop_call) {
+        _on_stop_call(cid);
+    }
 }
 
 void SipBClient::sendCallTerminate(const eXosip_event_t *event) const {
@@ -781,6 +864,8 @@ void SipBClient::closeCall(const SockException &ex, int cid, int did) {
         PrintW("通话[%d][%d]结束: %s",cid,did,ex.what());
     }else {
         PrintW("通话[%s][%d][%d]结束: %s",it->second->sessionName().c_str(), cid,did,ex.what());
+        //关闭数据采集 编码 输入
+        onStopStream(it->second,cid);
         //这里触发析构 来关闭session
         _active_sessions.erase(cid);
     }
@@ -845,6 +930,7 @@ void SipBClient::onEventInvite(eXosip_event_t *event) {
 
     std::string answer_sdp = session->makeAnswerSdp(_local_ip, port);
     _active_sessions[event->cid] = session;
+    session->setCid(event->cid);
 
     InfoL << "创建会话成功, 类型=" << session_name << ", RTP 端口=" << port;
 
