@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by RainbowSea on 2026/7/2.
 //
 
@@ -35,6 +35,7 @@ static const char* STR_EVENT_TYPE_REQUEST_HISTORY_ALARM{"Request_History_Alarm"}
 static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_ALARM{"Response_History_Alarm"};
 static const char* STR_EVENT_TYPE_REQUEST_HISTORY_VIDEO{"Request_History_Video"};
 static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_VIDEO{"Response_History_Video"};
+static const char* STR_EVENT_TYPE_REQUEST_PTZ_CONTROL{"Control_Camera"};
 
 enum class ClientStatus {
     UN_INIT = 0,
@@ -150,6 +151,30 @@ struct SubscribeInfo {
     uint64_t expiration_time,last_report_time{0};
 };
 
+
+// 云镜控制命令(B.8)
+enum class PtzCommand : int32_t {
+    IRIS_PLUS       = 0x0102,
+    IRIS_MINUS      = 0x0103,
+    FOCUS_NEAR      = 0x0202,
+    FOCUS_FAR       = 0x0204,
+    ZOOM_WIDE       = 0x0302,
+    ZOOM_TELE       = 0x0303,
+    UP              = 0x0501,
+    DOWN            = 0x0502,
+    LEFT            = 0x0503,
+    RIGHT           = 0x0504,
+    PRESET_SET      = 0x0601,
+    PRESET_CALL     = 0x0602,
+    PRESET_DEL      = 0x0603,
+    STOP            = 0x0901,
+    WIPER_ON        = 0x0b01,
+    WIPER_OFF       = 0x0b02,
+    LIGHT_ON        = 0x0d01,
+    LIGHT_OFF       = 0x0d02,
+    PTZ_ON          = 0x1101,
+    PTZ_OFF         = 0x1102,
+};
 
 enum class RtpPayload {
     MP4V_ES = 98,

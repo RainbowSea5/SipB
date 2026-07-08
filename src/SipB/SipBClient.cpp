@@ -1,4 +1,4 @@
-﻿#include "SipBClient.h"
+#include "SipBClient.h"
 
 #include <iostream>
 #include <cstring>
@@ -431,6 +431,8 @@ void SipBClient::handleMessage(eXosip_event_t *event) {
         handleHistoryAlarmRequest(event, xml_root);
     } else if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_HISTORY_VIDEO) == 0) {
         handleHistoryVideoRequest(event, xml_root);
+    } else if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_PTZ_CONTROL) == 0) {
+        handlePtzControlRequest(event, xml_root);
     } else {
         WarnL << "未实现的 EventType: " << event_type;
     }
@@ -556,6 +558,44 @@ void SipBClient::handleHistoryVideoRequest(eXosip_event_t *event, const xml_node
         WarnL << "未设置回调，查询录像 返回空";
         auto xml_str = RecordInfo::makeQueryHistoryVideoResponse({}, from_index, to_index, 0);
         sendMessageResponse(event, xml_str, "录像检索");
+    }
+}
+
+void SipBClient::handlePtzControlRequest(eXosip_event_t *event, const pugi::xml_node &xml_root) {
+    auto item_node = xml_root.child("Item");
+    std::string code = item_node.attribute("Code").value();
+    int32_t command = atoi(item_node.attribute("Command").value());
+    int32_t command_para1 = atoi(item_node.attribute("CommandPara1").value());
+    int32_t command_para2 = atoi(item_node.attribute("CommandPara2").value());
+    int32_t command_para3 = atoi(item_node.attribute("CommandPara3").value());
+
+    InfoL << "[PtzControl] Code: " << code
+          << ", Command: " << command
+          << ", Para1: " << command_para1
+          << ", Para2: " << command_para2
+          << ", Para3: " << command_para3;
+
+    if (_on_ptz_control_cb) {
+        _wait_answer_event[event->tid] = event;
+
+        auto weak_ptr = weak_from_this();
+        auto tid = event->tid;
+
+        auto success_cb = [weak_ptr, tid, code] {
+            auto client = weak_ptr.lock();
+            if (!client) return;
+            InfoL << "[PtzControl] 执行成功 Code: " << code;
+            client->async([tid, weak_ptr] {
+                if (auto cli = weak_ptr.lock()) {
+                    cli->sendMessageResponse(tid, "", "云镜控制");
+                }
+            });
+        };
+
+        _on_ptz_control_cb(code, command, command_para1, command_para2, command_para3, success_cb);
+    } else {
+        WarnL << "未设置回调，云镜控制 直接返回成功";
+        sendMessageResponse(event, "", "云镜控制");
     }
 }
 

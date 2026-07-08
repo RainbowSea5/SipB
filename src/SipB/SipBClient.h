@@ -1,4 +1,4 @@
-﻿#ifndef SIP_B_H
+#ifndef SIP_B_H
 #define SIP_B_H
 
 #include <string>
@@ -60,9 +60,15 @@ public:
         std::function<void(const std::vector<RecordInfo>& items, int real_num)>
     )>;
 
+    using OnPtzControlCallback = std::function<void(const std::string& code,
+        int32_t command, int32_t command_para1, int32_t command_para2, int32_t command_para3,
+        std::function<void()> success
+    )>;
+
     void setOnQueryResourceInfo(OnQueryResourceInfoCallback cb);
     void setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb);
     void setOnQueryHistoryVideo(OnQueryHistoryVideoCallback cb);
+    void setOnPtzControl(OnPtzControlCallback cb);
 
 
     // 视频编码回调: data, len, timestamp
@@ -116,6 +122,8 @@ private:
     void handleHistoryAlarmRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
     //[B.5] 处理服务器下发的 录像检索请求
     void handleHistoryVideoRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
+    //[B.8] 处理服务器下发的 云镜控制命令
+    void handlePtzControlRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
     // 通用的 MESSAGE 响应
     void sendMessageResponse(int tid, const std::string& body_str, const std::string& log_tag);
     void sendMessageResponse(const eXosip_event_t* event, const std::string& body_str, const std::string& log_tag) const;
@@ -153,6 +161,8 @@ private:
     OnQueryHistoryAlarmCallback _on_query_history_alarm_cb;
     // 录像检索回调
     OnQueryHistoryVideoCallback _on_query_history_video_cb;
+    // 云镜控制回调
+    OnPtzControlCallback _on_ptz_control_cb;
 #pragma endregion
 
     std::mutex _mtx;
