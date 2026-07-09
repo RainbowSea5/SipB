@@ -65,10 +65,16 @@ public:
         std::function<void()> success
     )>;
 
+    using OnCameraSnapCallback = std::function<void(const std::string& code,const std::string& pic_server,
+        int32_t snap_type,const std::string& range_str,int32_t interval,
+        std::function<void(const std::string& file_url, int32_t file_size, const std::string& verify, const std::string& utc_time_str)> success
+    )>;
+
     void setOnQueryResourceInfo(OnQueryResourceInfoCallback cb);
     void setOnQueryHistoryAlarm(OnQueryHistoryAlarmCallback cb);
     void setOnQueryHistoryVideo(OnQueryHistoryVideoCallback cb);
     void setOnPtzControl(OnPtzControlCallback cb);
+    void setOnCameraSnap(OnCameraSnapCallback cb);
 
 
     // 视频编码回调: data, len, timestamp
@@ -124,6 +130,8 @@ private:
     void handleHistoryVideoRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
     //[B.8] 处理服务器下发的 云镜控制命令
     void handlePtzControlRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
+    //[B.11] 处理服务器下发的 图片抓拍
+    void handleCameraSnapRequest(eXosip_event_t *event, const pugi::xml_node &xml_root);
     // 通用的 MESSAGE 响应
     void sendMessageResponse(int tid, const std::string& body_str, const std::string& log_tag);
     void sendMessageResponse(const eXosip_event_t* event, const std::string& body_str, const std::string& log_tag) const;
@@ -163,6 +171,8 @@ private:
     OnQueryHistoryVideoCallback _on_query_history_video_cb;
     // 云镜控制回调
     OnPtzControlCallback _on_ptz_control_cb;
+    // 图片抓拍回调
+    OnCameraSnapCallback _on_camera_snap_cb;
 #pragma endregion
 
     std::mutex _mtx;

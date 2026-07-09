@@ -36,6 +36,8 @@ static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_ALARM{"Response_History_Alarm
 static const char* STR_EVENT_TYPE_REQUEST_HISTORY_VIDEO{"Request_History_Video"};
 static const char* STR_EVENT_TYPE_RESPONSE_HISTORY_VIDEO{"Response_History_Video"};
 static const char* STR_EVENT_TYPE_REQUEST_PTZ_CONTROL{"Control_Camera"};
+static const char* STR_EVENT_TYPE_CAMERA_SNAP{"Camera_Snap"};
+static const char* STR_EVENT_TYPE_SNAPSHOT_NOTIFY{"Snapshot_Notify"};
 
 enum class ClientStatus {
     UN_INIT = 0,

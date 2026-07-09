@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
+#include <sstream>
 #include <utility>
 #include <sys/socket.h>   // AF_INET
 #include <netinet/in.h>   // IPPROTO_UDP
@@ -433,6 +434,8 @@ void SipBClient::handleMessage(eXosip_event_t *event) {
         handleHistoryVideoRequest(event, xml_root);
     } else if (strcmp(event_type, STR_EVENT_TYPE_REQUEST_PTZ_CONTROL) == 0) {
         handlePtzControlRequest(event, xml_root);
+    } else if (strcmp(event_type, STR_EVENT_TYPE_CAMERA_SNAP) == 0) {
+        handleCameraSnapRequest(event, xml_root);
     } else {
         WarnL << "未实现的 EventType: " << event_type;
     }
@@ -596,6 +599,55 @@ void SipBClient::handlePtzControlRequest(eXosip_event_t *event, const pugi::xml_
     } else {
         WarnL << "未设置回调，云镜控制 直接返回成功";
         sendMessageResponse(event, "", "云镜控制");
+    }
+}
+
+void SipBClient::handleCameraSnapRequest(eXosip_event_t *event, const xml_node &xml_root) {
+    auto item_node = xml_root.child("Item");
+    std::string code = item_node.attribute("Code").value();
+    std::string pic_server = item_node.attribute("PicServer").value();
+    int32_t snap_type = atoi(item_node.attribute("SnapType").value());
+    std::string range_str = item_node.attribute("Range").value();
+    int32_t interval = atoi(item_node.attribute("Interval").value());
+
+    InfoL << "[CameraSnap] Code: " << code
+          << ", PicServer: " << pic_server
+          << ", SnapType: " << snap_type
+          << ", Range: " << range_str
+          << ", Interval: " << interval;
+
+    // 先回复 200 OK，不等待抓拍完成
+    sendMessageResponse(event, "", "图片抓拍");
+
+    if (_on_camera_snap_cb) {
+        auto weak_self = weak_from_this();
+
+        auto success_cb = [weak_self, code](const std::string& file_url, int32_t file_size, const std::string& verify, const std::string& time) {
+            auto self = weak_self.lock();
+            if (!self) return;
+
+            // 构建 B.13 Snapshot_Notify XML
+            pugi::xml_document doc;
+            auto root = doc.append_child("SIP_XML");
+            root.append_attribute("EventType") = STR_EVENT_TYPE_SNAPSHOT_NOTIFY;
+            auto item = root.append_child("Item");
+            item.append_attribute("Code") = code.c_str();
+            item.append_attribute("Type") = 0;
+            item.append_attribute("Time") = time.c_str();
+            item.append_attribute("FileUrl") = file_url.c_str();
+            item.append_attribute("FileSize") = file_size;
+            item.append_attribute("Verify") = verify.c_str();
+
+            auto xml_str = XmlTools::xmlDocumentToString(doc);
+            InfoL << "[SnapshotNotify] B.13 Code: " << code << ", FileUrl: " << file_url;
+            self->async([weak_self, xml_str] {
+                if (auto cli = weak_self.lock()) {
+                    cli->sendMessage(xml_str, STR_METHOD_NOTIFY);
+                }
+            });
+        };
+
+        _on_camera_snap_cb(code, pic_server, snap_type, range_str, interval, success_cb);
     }
 }
 
