@@ -183,6 +183,15 @@ void SipBClient::setOnAddPcmPlayer(PcmPlayerCallback cb) {
     _on_add_pcm_player = std::move(cb);
 }
 
+void SipBClient::setOnPtzControl(OnPtzControlCallback cb) {
+    checkNotRegister();
+    _on_ptz_control_cb = std::move(cb);
+}
+
+void SipBClient::setOnCameraSnap(OnCameraSnapCallback cb) {
+    checkNotRegister();
+    _on_camera_snap_cb = std::move(cb);
+}
 
 void SipBClient::sendInitialRegister() {
     std::string from = "sip:" + _device_id + "@" + _server_domain;
